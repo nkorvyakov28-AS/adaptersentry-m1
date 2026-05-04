@@ -9,12 +9,15 @@ The following properties hold for all M1 code paths:
 - No tensor operation depends on untrusted file content as executable code.
 - All file paths provided by the caller are resolved through `pathlib.Path.resolve()`
   before use, preventing path traversal.
-- File sizes are checked against a hard limit (2 GB uncompressed) before tensor allocation.
-  Files exceeding the limit are rejected without reading tensor data.
-- Adapter metadata is read as plain strings and sanitised before any downstream use.
+- Tensors exceeding 1 billion elements are rejected before allocation (tensor bomb guard).
+  The check runs on the header-declared shape before any memory is allocated.
+- Adapter metadata is read as plain strings. Metadata nesting depth is capped at 5 levels;
+  payloads exceeding the limit are flagged as a security signal and not processed further.
 - `eval()`, `exec()`, and `pickle.load()` are never called on untrusted content.
-- The `safetensors` library format provides safe, header-validated tensor parsing;
-  raw pickle or PyTorch checkpoint formats are not accepted.
+- The `safetensors` library provides safe, header-validated tensor parsing;
+  raw pickle and PyTorch checkpoint formats (`.pt`, `.bin`) are explicitly rejected.
+- Workers validate that adapter paths are absolute before processing, enforcing the
+  trust boundary between the orchestrator and worker pool.
 
 The behavioral sandbox (M2), signature engine (M3), and runtime monitor (M4) are not yet
 implemented. Their security models will be documented when those components ship.
@@ -32,7 +35,10 @@ report it so it can be investigated and disclosed responsibly.
    email `security@adaptersentry.io`.
 2. Include:
    - The HuggingFace repository ID (e.g., `author/model-name`)
-   - The M1 JSON report (`adaptersentry-m1 --adapter ./adapter.safetensors --output report.json`)
+   - The M1 scan report:
+     ```
+     adaptersentry scan ./adapter.safetensors --format summary-json --output report.json
+     ```
    - A brief description of why you consider the adapter suspicious
 3. **Do not attach the `.safetensors` file itself** to public GitHub issues.
    If sharing the file is necessary for investigation, coordinate via email.
@@ -79,9 +85,8 @@ We will communicate status updates if a deadline cannot be met.
 
 | Version | Supported |
 |---|---|
-| v0.2.0 (current release) | ✅ Yes |
-| v0.1.0 | ✅ Yes |
-| Pre-release commits | Not supported |
+| v1.0.1 (current) | ✅ Yes |
+| v1.0.0 | ✅ Yes |
+| v0.x.x | ❌ No |
 
-Only the current release receives security patches. If you are running a pre-release
-commit, update to v0.2.0 before reporting.
+Only the two most recent releases receive security patches.
