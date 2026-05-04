@@ -1,0 +1,23 @@
+[
+  {
+    "scenario": "cold",
+    "n_adapters": 500,
+    "n_workers": 2,
+    "total_wall_s": 373.405,
+    "throughput_per_min": 80.3,
+    "latency_p50_ms": 1476.5,
+    "latency_p95_ms": 1589.0,
+    "latency_p99_ms": 1641.0,
+    "peak_total_rss_mb": 416.3,
+    "peak_per_worker_mb": 208.1,
+    "error_rate": 0.0,
+    "cache_hit_rate": 0.0,
+    "stats": {
+      "ok": 500,
+      "degraded": 0,
+      "failed": 0,
+      "cached": 0
+    },
+    "timestamp": "2026-05-01T12:11:56.760655+00:00"
+  }
+]

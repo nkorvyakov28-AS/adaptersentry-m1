@@ -1,0 +1,32 @@
+{
+  "metrics": {
+    "scenario": "cold",
+    "n_adapters": 498,
+    "n_workers": 2,
+    "total_wall_s": 24624.049,
+    "throughput_per_min": 1.2,
+    "latency_p50_ms": 101250.5,
+    "latency_p95_ms": 210638.0,
+    "latency_p99_ms": 246017.0,
+    "peak_total_rss_mb": 1534.2,
+    "peak_per_worker_mb": 767.1,
+    "error_rate": 0.0884,
+    "cache_hit_rate": 0.0,
+    "stats": {
+      "ok": 454,
+      "degraded": 0,
+      "failed": 44,
+      "cached": 0
+    },
+    "timestamp": "2026-05-01T02:41:44.480958+00:00"
+  },
+  "comparison": {
+    "reference_label": "hf_benchmark_500_v3",
+    "reference_adapters": 500,
+    "reference_minutes": 195.0,
+    "reference_throughput_per_min": 2.5641025641025643,
+    "speedup_x": 0.47,
+    "estimated_500_minutes": 416.7,
+    "time_saved_minutes": -221.7
+  }
+}

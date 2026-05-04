@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "adaptersentry"
+version = "1.0.1"
+description = "Static security scanner for LoRA adapters — detects anomalous weight patterns in .safetensors files"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.11"
+keywords = ["security", "llm", "lora", "adapter", "safetensors", "malware-detection", "static-analysis"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+dependencies = [
+    "safetensors>=0.4.0",
+    "numpy>=1.24.0",
+    "scipy>=1.11.0",
+    "scikit-learn>=1.3.0",
+    "pydantic>=2.5.0",
+    "rich>=13.0.0",
+    "huggingface_hub>=0.20.0",
+    "psutil>=5.9.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/nkorvyakov28-AS/adaptersentry"
+Documentation = "https://github.com/nkorvyakov28-AS/adaptersentry/tree/main/docs"
+Repository = "https://github.com/nkorvyakov28-AS/adaptersentry"
+"Bug Tracker" = "https://github.com/nkorvyakov28-AS/adaptersentry/issues"
+Changelog = "https://github.com/nkorvyakov28-AS/adaptersentry/blob/main/CHANGELOG.md"
+
+[project.scripts]
+adaptersentry       = "adaptersentry.cli.main:main"
+adaptersentry-m1    = "adaptersentry.analyzer:main"
+adaptersentry-bench = "benchmarks.hub_scanner:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4.0"]
+ray = ["ray[default]>=2.9.0"]
+bench = ["huggingface_hub>=0.20.0"]
+
+[tool.setuptools.packages.find]
+where = ["src", "."]
+include = ["adaptersentry*", "benchmarks*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

@@ -1,0 +1,18 @@
+# Runtime dependencies — mirrors [project.dependencies] in pyproject.toml.
+# For development, use: pip install -e ".[dev]"
+safetensors>=0.4.0
+numpy>=1.24.0
+scipy>=1.11.0
+scikit-learn>=1.3.0
+pydantic>=2.5.0
+rich>=13.0.0
+huggingface_hub>=0.20.0
+psutil>=5.9.0
+
+# Optional — Ray actor pool backend (OPT-03)
+# pip install adaptersentry[ray]
+# ray[default]>=2.9.0
+
+# Optional — Rust hot-path extensions (OPT-04, requires Rust toolchain)
+# pip install maturin
+# cd adaptersentry-rs && VIRTUAL_ENV=$(python -c "import sys; print(sys.prefix)") maturin develop --release

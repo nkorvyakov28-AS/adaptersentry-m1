@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.egg-info/
+.pytest_cache/
+dist/
+build/
+*.egg
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Adapter weight files — never commit tensor data
+*.safetensors
+*.bin
+*.pt
+*.ckpt
+
+# Batch run audit logs — per-run only, not part of the repo
+*.jsonl
+
+# Benchmark per-run artifacts
+benchmarks/results/current.json
+benchmarks/results/*.tmp.json
+
+# Rust library crate — Cargo.lock not tracked for library crates (cdylib)
+adaptersentry-rs/Cargo.lock

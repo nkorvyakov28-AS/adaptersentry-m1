@@ -1,0 +1,18 @@
+[package]
+name = "adaptersentry_rs"
+version = "0.1.0"
+edition = "2021"
+description = "Rust hot-path extensions for AdapterSentry (OPT-04)"
+
+[lib]
+name = "adaptersentry_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+numpy = "0.22"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

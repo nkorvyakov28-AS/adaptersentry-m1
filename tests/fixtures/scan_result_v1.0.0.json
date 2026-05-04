@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0.0",
+  "identity": {
+    "scan_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "run_id": "test-run-v1",
+    "analyzer_version": "0.2.0",
+    "analyzer_config_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "schema_version": "1.0.0",
+    "started_at": "2026-01-01T00:00:00+00:00",
+    "completed_at": "2026-01-01T00:00:01+00:00",
+    "wall_time_ms": 1000
+  },
+  "artifact": {
+    "logical_id": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "content_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "header_hash": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "file_size_bytes": 1024,
+    "source": {
+      "kind": "local_path",
+      "local_path": "/tmp/test.safetensors",
+      "hf_repo_id": null,
+      "hf_revision": null,
+      "url": null
+    },
+    "resolved_at": "2026-01-01T00:00:00+00:00"
+  },
+  "adapter_metadata": {
+    "claimed_rank": null,
+    "lora_alpha": null,
+    "base_model": null,
+    "target_modules": [],
+    "peft_type": null,
+    "framework": null,
+    "metadata_depth": 0,
+    "metadata_present": false,
+    "raw": {}
+  },
+  "verdict": {
+    "overall_score": 0,
+    "overall_level": "LOW",
+    "recommended_action": "allow",
+    "m2_recommended": false,
+    "false_positive_suppressed": 0,
+    "training_status": "TRAINED",
+    "policy_signals": []
+  },
+  "ensemble": {
+    "score": 0.0,
+    "risk_level": "LOW",
+    "top_contributors": [],
+    "detector_weights": {}
+  },
+  "findings": [],
+  "errors": [],
+  "status": "ok",
+  "parse_status": "ok",
+  "analysis_mode": "full",
+  "n_layers": 2,
+  "n_layers_analyzed": 2
+}
