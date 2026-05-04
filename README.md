@@ -37,18 +37,18 @@ before loading.
 ### Install
 
 ```bash
-pip install git+https://github.com/nkorvyakov28-AS/adaptersentry.git@v1.0.1
+pip install adaptersentry
 
-# With Ray backend (optional)
-pip install "adaptersentry[ray] @ git+https://github.com/nkorvyakov28-AS/adaptersentry.git@v1.0.1"
+# With Ray backend (optional, recommended for large corpora)
+pip install "adaptersentry[ray]"
 
-# With Rust hot-path extensions (optional, requires Rust toolchain)
+# With Rust hot-path extensions (optional, requires Rust toolchain — 57× full-mode throughput)
 pip install maturin
 cd adaptersentry-rs && VIRTUAL_ENV=$(python -c "import sys; print(sys.prefix)") maturin develop --release
 
-# Or clone for local development
-git clone https://github.com/nkorvyakov28-AS/adaptersentry
-cd adaptersentry
+# Development install from source
+git clone https://github.com/nkorvyakov28-AS/adaptersentry-m1
+cd adaptersentry-m1
 pip install -e ".[dev]"
 ```
 
@@ -386,7 +386,7 @@ Benchmark methodology: [docs/benchmarks/methodology.md](docs/benchmarks/methodol
   "schema_version": "1.0.0",
   "identity": {
     "scan_id": "sha256:...",
-    "analyzer_version": "0.4.0",
+    "analyzer_version": "1.0.1",
     "schema_version": "1.0.0"
   },
   "artifact": {
@@ -420,7 +420,7 @@ Full schema reference: [docs/output-schema/scan-result.md](docs/output-schema/sc
 ```json
 {
   "schema_version": "1.0.0",
-  "tool": {"name": "adaptersentry", "version": "0.4.0"},
+  "tool": {"name": "adaptersentry", "version": "1.0.1"},
   "risk_summary": {
     "overall_risk": 0, "risk_level": "LOW",
     "ensemble_score": 4.1, "ensemble_risk_level": "LOW",
@@ -458,8 +458,8 @@ Full schema reference: [docs/output-schema/adapter-report.md](docs/output-schema
 ## Development
 
 ```bash
-git clone https://github.com/nkorvyakov28-AS/adaptersentry
-cd adaptersentry
+git clone https://github.com/nkorvyakov28-AS/adaptersentry-m1
+cd adaptersentry-m1
 pip install -e ".[dev]"
 pytest tests/ -q                    # run all 773 tests
 adaptersentry scan --help           # verify CLI
@@ -485,7 +485,10 @@ scikit-learn >= 1.3.0
 pydantic >= 2.5.0
 rich >= 13.0.0
 psutil >= 5.9.0
-huggingface_hub >= 0.20.0   # required for adaptersentry-bench only
+
+# Optional extras
+ray[default] >= 2.9.0      # pip install "adaptersentry[ray]"
+huggingface_hub >= 0.20.0  # pip install "adaptersentry[bench]"
 ```
 
 ---
