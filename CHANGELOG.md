@@ -3,6 +3,38 @@
 All notable changes to AdapterSentry are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.0.2] — 2026-05-05
+
+### Added
+
+**BehavioralResult / ProbeResult v1.0.0 wire contract**
+The `BehavioralResult` placeholder (5 fields, `schema_version='0.1.0-placeholder'`)
+is promoted to the public 1.0.0 wire contract. Adds the typed `ProbeResult`
+class. Both retain `extra='ignore'` and `frozen=True` for forward compatibility.
+
+New / promoted fields on `BehavioralResult`:
+`behavioral_verdict`, `trigger_confirmed`, `behavioral_score`,
+`semantic_drift_score`, `base_model_used`, `base_model_sha`,
+`probe_set_version`, `n_probes_run`, `n_probes_confirmed`, `n_probes_skipped`,
+`skip_reason` (enum: BASE_MODEL_MISMATCH / BASE_MODEL_UNKNOWN /
+PROBE_SUITE_TIMEOUT / ADAPTER_LOAD_FAILED), `probe_results: list[ProbeResult]`,
+`targeted_layers`. Legacy `sandbox_verdict` and `raw` fields kept for
+backwards compatibility.
+
+`ProbeResult` fields: `probe_id`, `probe_set_version`, `trigger_type`,
+`verdict` (confirmed / cleared / inconclusive / skipped / error),
+`trigger_confirmed`, `semantic_drift`, `kl_drift`, `string_match`,
+`refusal_bypass`, `severity_weight`, `base_output_hash`,
+`patched_output_hash`, `elapsed_ms`, `error`.
+
+This is a public wire contract; downstream M2 implementations populate it.
+
+**`scan_to_result(adapter_path)` public API**
+Returns the engine-level `ScanResult` (with `.identity`, `.verdict`,
+`.artifact`) directly, instead of the lower-level `AdapterReport`. Required
+by `CombinedReport` and downstream sandbox runners; previously only available
+via the private `cli._build_scan_result`.
+
 ## [1.0.1] — 2026-05-04
 
 ### Fixed
