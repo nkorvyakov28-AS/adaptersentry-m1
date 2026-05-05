@@ -9,6 +9,6 @@ Quick start
 """
 
 from adaptersentry.version import __version__
-from adaptersentry.analyzer import analyze, load_adapter, scan
+from adaptersentry.analyzer import analyze, load_adapter, scan, scan_to_result
 
-__all__ = ["analyze", "load_adapter", "scan", "__version__"]
+__all__ = ["analyze", "load_adapter", "scan", "scan_to_result", "__version__"]

@@ -1,17 +1,19 @@
-"""CombinedReport — M1 + M2 unified verdict (M2 fields are placeholder stubs).
+"""CombinedReport — M1 + M2 unified verdict.
 
-M1-only scans populate the m1 field only. The m2 and behavioral_result fields
-remain at their defaults (status='not_run'). Consumers MUST check
-policy_gate.m2_triggered before reading behavioral_result.
+schema_version = "1.0.0" — public stable contract.
 
-This schema is intentionally forward-compatible: when M2 is implemented,
-BehavioralResult.schema_version will be bumped from '0.1.0-placeholder' to
-a real version, and the fields will be filled in by the M2 runner.
+M1-only scans populate the m1 field only; the m2 field defaults to
+BehavioralResult(status='not_run'). Consumers MUST check
+policy_gate.m2_triggered before reading behavioral signals from m2.
+
+The BehavioralResult / ProbeResult shapes here are part of the public
+contract. Computation lives in downstream M2 implementations; this schema
+is a stable wire format that those implementations populate.
 
 CombinedReport.final_verdict is the authoritative signal for enforcement:
   'allow'  — M1 low-risk AND (M2 not triggered OR M2 cleared)
   'review' — any MEDIUM signal or M2 inconclusive
-  'block'  — M1 HIGH/CRITICAL OR M2 flagged
+  'block'  — M1 HIGH/CRITICAL OR M2 confirmed
 """
 
 from __future__ import annotations
@@ -24,15 +26,74 @@ from adaptersentry.engine.schemas.identity import AdapterArtifactIdentity
 from adaptersentry.engine.schemas.scan_result import ScanResult
 
 
-class BehavioralResult(BaseModel):
-    """M2 behavioral sandbox result — placeholder until M2 is implemented."""
+ProbeVerdictLiteral = Literal["confirmed", "cleared", "inconclusive", "skipped", "error"]
+BehavioralStatusLiteral = Literal["not_run", "completed", "failed", "skipped"]
+BehavioralVerdictLiteral = Literal["confirmed", "cleared", "inconclusive", "skipped"]
+SkipReasonLiteral = Literal[
+    "BASE_MODEL_MISMATCH",
+    "BASE_MODEL_UNKNOWN",
+    "PROBE_SUITE_TIMEOUT",
+    "ADAPTER_LOAD_FAILED",
+]
+
+
+class ProbeResult(BaseModel):
+    """Per-probe outcome from the M2 behavioral sandbox.
+
+    Schema is wire-stable; downstream implementations populate the metric
+    fields. The `verdict` enum is the authoritative per-probe signal.
+    """
 
     model_config = ConfigDict(frozen=True, extra="ignore")
 
-    schema_version: str = "0.1.0-placeholder"
-    status: Literal["not_run", "completed", "failed"] = "not_run"
+    probe_id: str
+    probe_set_version: str = "v0.1"
+    trigger_type: str
+    verdict: ProbeVerdictLiteral
+
+    trigger_confirmed: bool = False
+    semantic_drift: float = 0.0
+    kl_drift: float = 0.0
+    string_match: bool = False
+    refusal_bypass: bool = False
+    severity_weight: float = 0.0
+
+    base_output_hash: str | None = None
+    patched_output_hash: str | None = None
+    elapsed_ms: int = 0
+    error: str | None = None
+
+
+class BehavioralResult(BaseModel):
+    """M2 behavioral sandbox result — wire-stable v1.0.0.
+
+    Defaults to status='not_run' so M1-only scans can construct an empty
+    instance. M2 implementations fill in the metric / probe fields.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    schema_version: str = "1.0.0"
+    status: BehavioralStatusLiteral = "not_run"
+
+    behavioral_verdict: BehavioralVerdictLiteral | None = None
+    trigger_confirmed: bool = False
+    behavioral_score: float = 0.0
+    semantic_drift_score: float = 0.0
+
+    base_model_used: str | None = None
+    base_model_sha: str | None = None
+    probe_set_version: str | None = None
+
+    n_probes_run: int = 0
+    n_probes_confirmed: int = 0
+    n_probes_skipped: int = 0
+
+    skip_reason: SkipReasonLiteral | None = None
+    probe_results: list[ProbeResult] = Field(default_factory=list)
+    targeted_layers: list[str] = Field(default_factory=list)
+
     sandbox_verdict: str | None = None
-    probe_results: list[dict[str, Any]] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
 
 

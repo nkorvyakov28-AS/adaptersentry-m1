@@ -46,7 +46,8 @@ class TestVersionFlag:
         result = _run("--version")
         assert result.returncode == 0
         assert "adaptersentry" in result.stdout
-        assert "1.0.1" in result.stdout
+        from adaptersentry.version import __version__
+        assert __version__ in result.stdout
 
 
 class TestScanTextFormat:

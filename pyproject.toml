@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "adaptersentry"
-version = "1.0.1"
+version = "1.0.2"
 description = "Static security scanner for LoRA adapters — detects anomalous weight patterns in .safetensors files"
 readme = "README.md"
 license = {file = "LICENSE"}

@@ -520,6 +520,37 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def scan_to_result(
+    adapter_path: Path,
+    claimed_rank: int | None = None,
+    *,
+    fast: bool = False,
+) -> "Any":  # ScanResult — imported lazily
+    """Run M1 static analysis and return a typed ScanResult.
+
+    ScanResult is the engine-level wrapper used by CombinedReport and
+    downstream M2 integrations (see engine/schemas/scan_result.py). It
+    embeds the ScanIdentity, AdapterArtifactIdentity, and RiskVerdict
+    that M2 orchestrators need.
+
+    Use this in preference to ``scan()`` when constructing a CombinedReport
+    or passing into M2 sandbox runners — those consumers require
+    ScanResult, not the lower-level AdapterReport.
+
+    Args:
+        adapter_path: Path to the .safetensors file.
+        claimed_rank: Expected LoRA rank r, inferred from metadata if omitted.
+        fast: If True, skip expensive analysis paths (forwarded to scan()).
+
+    Returns:
+        ScanResult — engine-level schema-stable result.
+    """
+    from adaptersentry.cli.scan import _build_scan_result
+
+    report = scan(adapter_path, claimed_rank, fast=fast)
+    return _build_scan_result(adapter_path, report, claimed_rank)
+
+
 def main() -> None:
     """CLI entry point for the legacy adaptersentry-m1 command."""
     parser = _build_arg_parser()
