@@ -85,8 +85,9 @@ We will communicate status updates if a deadline cannot be met.
 
 | Version | Supported |
 |---|---|
-| v1.0.1 (current) | ✅ Yes |
-| v1.0.0 | ✅ Yes |
+| v1.0.2 (current) | ✅ Yes |
+| v1.0.1 | ✅ Yes |
+| v1.0.0 | ❌ No |
 | v0.x.x | ❌ No |
 
 Only the two most recent releases receive security patches.

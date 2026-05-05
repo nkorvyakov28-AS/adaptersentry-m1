@@ -1,6 +1,6 @@
 # AdapterSentry — Architecture Overview
 
-> v1.0.1 (2026-05-04). Entry point to the architecture documentation subdirectory.
+> v1.0.2 (2026-05-05). Entry point to the architecture documentation subdirectory.
 
 AdapterSentry is a security scanner for LoRA adapters distributed as `.safetensors`
 files. It inspects adapter weight tensors statically — without loading a base model or

@@ -369,6 +369,7 @@ report = scan("adapter.safetensors")  # AdapterReport
 - Metadata depth check (> 5 levels) flagged as anomaly signal
 - All custom weights validated on construction to prevent score manipulation
 
+[1.0.2]: https://github.com/nkorvyakov28-AS/adaptersentry/releases/tag/v1.0.2
 [1.0.1]: https://github.com/nkorvyakov28-AS/adaptersentry/releases/tag/v1.0.1
 [1.0.0]: https://github.com/nkorvyakov28-AS/adaptersentry/releases/tag/v1.0.0
 [0.4.1]: https://github.com/nkorvyakov28-AS/adaptersentry/releases/tag/v0.4.1

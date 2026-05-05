@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-%3E%3D3.11-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![Status](https://img.shields.io/badge/status-stable-brightgreen)
-![Version](https://img.shields.io/badge/version-1.0.1-blue)
+![Version](https://img.shields.io/badge/version-1.0.2-blue)
 
 AdapterSentry is a static security scanner for LoRA adapters distributed as `.safetensors`
 files. Anyone can publish an adapter to HuggingFace Hub; a malicious adapter can inject
@@ -12,9 +12,11 @@ backdoors, suppress safety alignment, or redirect model behaviour — all withou
 base model weights. AdapterSentry inspects the adapter weight tensors directly, before the
 adapter is loaded into any model.
 
-**v1.0.1** fixes two bugs: `feature_completeness` always 0% in fast mode (entropy_compression
-now runs in both modes per spec), and a misleading `rule 100/100` display when ensemble is LOW
-(additive rule score inflates on many-layer adapters; clarifying note added to VERDICT).
+**v1.0.2** promotes `BehavioralResult` / `ProbeResult` to the v1.0.0 public wire contract
+and adds `scan_to_result(adapter_path)` as a stable public API returning `ScanResult`
+directly (required by downstream sandbox runners). Also adds `ScanPhase.BEHAVIORAL`.
+**v1.0.1** fixes two bugs: `feature_completeness` always 0% in fast mode, and a
+misleading `rule 100/100` display when ensemble is LOW.
 **v1.0.0** — M1 Static Analyzer complete: 69 adapters/min (Ray + Rust), 57× faster than baseline.
 See [docs/architecture/open-core-boundary.md](docs/architecture/open-core-boundary.md).
 
@@ -97,13 +99,17 @@ adaptersentry batch --input-dir ./adapters --run-id my-run --resume
 
 ```python
 from pathlib import Path
-from adaptersentry import scan
+from adaptersentry import scan, scan_to_result
 from adaptersentry.scoring.score_breakdown import compute_score_breakdown
 from adaptersentry.scoring.confidence import compute_confidence_score, compute_quality_score
 
-# Full analysis (default)
+# Full analysis (default) — returns AdapterReport
 report = scan(Path("adapter.safetensors"))
 print(report.risk_summary.risk_level)          # LOW / MEDIUM / HIGH / CRITICAL
+
+# Engine-level ScanResult — returns ScanResult with .identity, .verdict, .artifact
+result = scan_to_result(Path("adapter.safetensors"))
+print(result.verdict.overall_level)            # LOW / MEDIUM / HIGH / CRITICAL
 
 # Score breakdown across 7 feature families
 breakdown = compute_score_breakdown(report)
@@ -121,70 +127,37 @@ report = scan(Path("adapter.safetensors"), fast=True)
 
 ---
 
-## What's New in v0.4.0
+## What's New in v1.0.2
 
-### M1 Analytics Expansion
+### BehavioralResult / ProbeResult v1.0.0 wire contract
 
-**Extended distribution analysis (M1-ANAL-01)**
-`DistributionFeatures` now includes `median`, `p01`, `p99`, `iqr`, `zero_ratio`, and
-`delta_entropy` on the effective weight update ΔW = B @ A. Per-tensor A/B supplementary
-stats computed for both lora_A and lora_B independently.
+`BehavioralResult` is promoted from a 5-field placeholder to the full public v1.0.0 schema.
+New / promoted fields: `behavioral_verdict`, `trigger_confirmed`, `behavioral_score`,
+`semantic_drift_score`, `base_model_used`, `base_model_sha`, `probe_set_version`,
+`n_probes_run`, `n_probes_confirmed`, `n_probes_skipped`, `skip_reason` (enum),
+`probe_results: list[ProbeResult]`, `targeted_layers`. Legacy `sandbox_verdict` and
+`raw` fields are kept for backwards compatibility.
 
-**Entropy and compression features (M1-ANAL-02)**
-New `EntropyCompressionFeatures` family: `value_repeat_ratio`, `unique_value_ratio`,
-`approx_compression_ratio` (zlib), `byte_entropy`, `sign_entropy`, `sign_balance`,
-`quantization_suspect_score`. Runs in O(n) in both fast and full mode.
+`ProbeResult` fields: `probe_id`, `probe_set_version`, `trigger_type`,
+`verdict` (confirmed / cleared / inconclusive / skipped / error), `trigger_confirmed`,
+`semantic_drift`, `kl_drift`, `string_match`, `refusal_bypass`, `severity_weight`,
+`base_output_hash`, `patched_output_hash`, `elapsed_ms`, `error`.
 
-**Inter-layer similarity (M1-ANAL-03)**
-Pairwise cosine + Pearson correlation between ΔW matrices across all layers, grouped by
-module type. Detects non-adjacent layer pairs with cosine similarity > 0.85 — a signal
-consistent with copy-paste injection targeting multiple module types.
+Both schemas use `extra='ignore'` and `frozen=True` for forward compatibility. This is
+the public wire contract; downstream M2 implementations populate it.
 
-### Score Breakdown and Confidence (M1-SCORE-01/02/03)
+### `scan_to_result()` public API
 
-**`ScoreBreakdown`** decomposes the risk score across 7 feature families (parse, metadata,
-norm, distribution, entropy, similarity, training_pattern), each with a raw score,
-normalized score, weight, and top reasons. Visible via `--verbose`.
+New top-level `scan_to_result(adapter_path)` returns the engine-level `ScanResult`
+(with `.identity`, `.verdict`, `.artifact`) directly, bypassing the `AdapterReport`
+intermediary. Required by `CombinedReport` and downstream sandbox runners; previously
+only accessible via the private `cli._build_scan_result`.
 
-**`ScoringPolicy`** allows versioned per-family cap/floor and escalation rules with
-`score_bump` — configurable without code changes.
+### `ScanPhase.BEHAVIORAL`
 
-**`ConfidenceScore`** is orthogonal to risk: derived only from analysis coverage and
-data-quality signals (never from anomaly features). Reports `verdict_certainty: high /
-medium / low` and enables natural SaaS tier differentiation without hiding results.
-
-### Per-Layer Findings (M1-RPT-01/02)
-
-`PerLayerFinding` ranks the top-10 most suspicious layers by `severity_score`, with
-triggered families, stable `RULE_CATALOG` wording, and `remediation_hint`. Visible in
-`--verbose` output under `TOP SUSPICIOUS LAYERS`.
-
-Human-readable summary (`render_human_summary`) now outputs fixed-block CLI output:
-
-```
-VERDICT           risk level + confidence + recommended action
-TOP SIGNALS       top-3 sub-scores with lead reasons
-FINDINGS          finding list
-
-── with --verbose ──
-SCORE BREAKDOWN   all 7 families with weights and reasons
-TOP SUSPICIOUS LAYERS   per-layer severity ranking
-ANALYSIS QUALITY  parse coverage, metadata, feature completeness
-```
-
-### Performance and Reliability
-
-**Per-layer bottleneck elimination** — full mode: 40s/adapter (was ∞), fast: 4.5s/adapter (was 227s).
-
-**Full-mode OOM fix** — peak RSS per worker: 7.5 GB → 524 MB on worst-case real-world
-adapters. Root cause: stride views in inter-layer similarity retained large buffers for the
-entire batch; fixed with `.copy()` at slice returns.
-
-**bfloat16 adapter support** — `safetensors.numpy` cannot construct numpy arrays for
-bfloat16 tensors. Parser now reads the safetensors header JSON to detect bfloat16 tensors
-before loading, then converts raw bytes to float32 using the bfloat16 bit-layout identity
-(`uint16 << 16 → view as float32`). Previously 48/498 HuggingFace adapters (9.6%) failed
-with `INVALID_SAFETENSORS`; now error rate is ~0%.
+New `ScanPhase.BEHAVIORAL` enum member marks the M2 pipeline phase in `ScanError`
+records, completing the phase taxonomy: `parse / metadata / feature / scoring /
+reporting / behavioral`.
 
 ---
 
@@ -386,7 +359,7 @@ Benchmark methodology: [docs/benchmarks/methodology.md](docs/benchmarks/methodol
   "schema_version": "1.0.0",
   "identity": {
     "scan_id": "sha256:...",
-    "analyzer_version": "1.0.1",
+    "analyzer_version": "1.0.2",
     "schema_version": "1.0.0"
   },
   "artifact": {
@@ -420,7 +393,7 @@ Full schema reference: [docs/output-schema/scan-result.md](docs/output-schema/sc
 ```json
 {
   "schema_version": "1.0.0",
-  "tool": {"name": "adaptersentry", "version": "1.0.1"},
+  "tool": {"name": "adaptersentry", "version": "1.0.2"},
   "risk_summary": {
     "overall_risk": 0, "risk_level": "LOW",
     "ensemble_score": 4.1, "ensemble_risk_level": "LOW",
