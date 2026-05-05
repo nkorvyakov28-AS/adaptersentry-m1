@@ -59,6 +59,7 @@ class ScanPhase(str, Enum):
     FEATURE = "feature"
     SCORING = "scoring"
     REPORTING = "reporting"
+    BEHAVIORAL = "behavioral"
 
 
 class ErrorCode(str, Enum):
