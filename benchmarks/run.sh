@@ -15,7 +15,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-PYTHON="${PYTHON:-/root/lora_env/bin/python3}"
+PYTHON="${PYTHON:-python3}"
 RESULTS_DIR="${REPO_ROOT}/benchmarks/results"
 CURRENT="${RESULTS_DIR}/current.json"
 BASELINE="${RESULTS_DIR}/baseline.json"
