@@ -1,334 +1,78 @@
-# AdapterSentry — Architecture Overview
+# Architecture Overview
 
-> v1.0.2 (2026-05-05). Entry point to the architecture documentation subdirectory.
+AdapterSentry M1 is a static security scanner for LoRA adapters stored as `.safetensors`
+files. It reads the adapter's weights without loading a base model and without running
+inference, and returns one `ScanResult 2.0.0` per adapter with a verdict of `allow`,
+`review` or `block`.
 
-AdapterSentry is a security scanner for LoRA adapters distributed as `.safetensors`
-files. It inspects adapter weight tensors statically — without loading a base model or
-executing any inference — to surface structural anomalies consistent with backdoor
-injection, safety-alignment suppression, or targeted layer manipulation.
+Static analysis is a first filter, not a proof of safety. Detection thresholds are not yet
+calibrated (see [Limits](../../README.md#limits--read-before-relying-on-a-verdict)).
 
----
+## Entry points
 
-## Open-Core Model
+| Entry point | Code |
+|---|---|
+| `adaptersentry.scan(path, ...) -> ScanResult` | `src/adaptersentry/scanner.py` |
+| `adaptersentry.load_scan_result(data) -> ScanResult` | `src/adaptersentry/schemas/result.py` |
+| `adaptersentry scan ADAPTER` | `src/adaptersentry/cli/scan.py` |
+| `adaptersentry batch --input-dir DIR` | `src/adaptersentry/cli/batch.py` → `engine/` |
 
-AdapterSentry follows an open-core model. M1 is the OSS static analysis engine
-(Apache 2.0). Additional commercial capabilities are planned for future releases
-and are not part of this package.
+`scan()` never raises: any failure becomes a structured result whose action is at least
+`review` (fail-closed).
 
----
-
-## Repository Structure
-
-This repository (`adaptersentry-m1`) is the OSS M1 package (Apache 2.0).
-Commercial capabilities are developed separately and are not part of this repository.
-
-See [repo-layout.md](repo-layout.md) for the full directory layout of the OSS package.
-
----
-
-## Pipeline at a Glance
+## Pipeline
 
 ```
-adapter.safetensors
-        │
-        ▼
-┌─────────────────────────────────────────────────────────────┐
-│  parsers/                                                   │
-│    has_lora_pairs()      key-only pre-check; no tensor load │
-│    load_adapter()        safetensors → raw numpy tensors    │
-│    _group_lora_layers()  {layer_name: {lora_A, lora_B}}     │
-│    parse_adapter_metadata() → AdapterMetadata               │
-│    bfloat16 → float32 auto-conversion (header-level detect) │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ per LoRA pair (A, B)
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│  features/   (FeatureExtractor.extract_layer)               │
-│                                                             │
-│  tensor_stats.py         compute_tensor_stats(A,B,fast)     │
-│                          compute_svd_stats(A, fast)         │
-│  delta_norm.py           compute_norm_features(A,B,fast)    │
-│                          ΔW Frobenius norm via Cholesky/matmul│
-│  distribution.py         compute_distribution_features(     │
-│                            A,B,fast) — kurtosis, skew,      │
-│                            median, p01/p99, iqr, zero_ratio  │
-│  entropy_compression.py  compute_entropy_compression_       │
-│                            features(A,B) — byte_entropy,    │
-│                            zlib ratio, sign_entropy, O(n)   │
-│  inter_layer_similarity.py  adapter-level pairwise cosine + │
-│                            Pearson across all LoRA layers   │
-│  layer_stats.py          detect_layer_anomalies()           │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ FeatureFamilyResult list per layer
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│  detectors/                                                 │
-│    entropy.py            Shannon entropy flags              │
-│    outlier.py            Z-score + IsolationForest (20t)    │
-│    wasserstein.py        W1 distance lora_A vs lora_B       │
-│    cross_layer.py        concentration anomaly across layers│
-│    init_detector.py      INIT_ONLY / PARTIALLY_TRAINED      │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ typed detector output
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│  scoring/                                                   │
-│    ensemble.py           EnsembleDetector.score_families()  │
-│                          → EnsembleSignal [0–100]           │
-│    risk_scorer.py        RiskScorer.score_flags()           │
-│                          → overall_risk [0–100]             │
-│    score_breakdown.py    compute_score_breakdown(report)    │
-│                          → ScoreBreakdown (7 sub-scores)    │
-│    confidence.py         compute_quality_score(report)      │
-│                          compute_confidence_score(report)   │
-│                          → ConfidenceScore + verdict_certainty│
-└──────────────────────────┬──────────────────────────────────┘
-                           │ AdapterReport
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│  reporting/                                                 │
-│    per_layer.py          rank_layer_findings(report)        │
-│                          → list[PerLayerFinding] top-10     │
-│    human_summary.py      render_human_summary(report,       │
-│                            verbose, no_color) → str        │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ AdapterReport + findings
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│  schemas/   AdapterReport v1.0.0 (stable public contract)   │
-│             ScanResult v1.0.0 (engine output contract)      │
-│             ScoreBreakdown, ConfidenceScore, PerLayerFinding│
-│             NormFeatures, DistributionFeatures, ...         │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│  reporters/                                                 │
-│    text    → render_human_summary()  (ANSI colour)          │
-│    summary-json  → ScanResult v1.0.0 (CI/machine contract)  │
-│    debug-json    → ScanResult + tensor_records (local debug)│
-│    sarif   → SARIF 2.1.0 (GitHub code scanning)             │
-└─────────────────────────────────────────────────────────────┘
+file ─► identity ─► config ─► inventory ─► per module (streamed) ─► intra ─► structural ─► verdict
 ```
 
----
+| Step | Module | What it does |
+|---|---|---|
+| Header guards | `parsers/safetensors.py` | Regular file, bounded file and header size, dtype allowlist (F32/F16/BF16), shape / byte-range / offset checks, ≤ 1 B elements per tensor, LoRA rank ≤ 1024 — all before any tensor is allocated |
+| Identity | `engine/identity.py` | SHA-256 of the file and of the header; provenance (file name unless `full_paths=True`) |
+| Config | `parsers/adapter_config.py` | Reads `adapter_config.json` next to the file (bounded, untrusted). Effective scale s = α/r, or α/√r with rsLoRA; without α, s = 1. `rank_pattern` / `alpha_pattern` keys are matched literally — regexes from the file are never compiled |
+| Inventory | `parsers/adapter_file.py`, `parsers/names.py` | Classifies every tensor from the header: LoRA A/B pairs (layer, expert, module), full weights (`modules_to_save`), DoRA vectors, trainable-token deltas, and anything not analysable, with a reason. Nothing is dropped silently |
+| Streaming | `parsers/adapter_file.py` | Loads one A/B pair at a time as float32 and releases it before the next; peak memory is bounded by the largest pair |
+| Exact ΔW statistics | `features/lowrank_core.py` | Singular values, Frobenius / row / column norms of ΔW = s·B·A computed exactly through the r×r Gram matrices A·Aᵀ and Bᵀ·B; ΔW is never materialised. Entry kurtosis is estimated by importance sampling of rows |
+| Module features | `features/spectral.py` | Shape features of ΔW (stable rank, participation ratio, spectral entropy, excess concentration, kurtosis, row/column concentration) plus two log-magnitude features; optional per attention head |
+| Intra-adapter comparison | `detectors/intra_adapter.py` | Per module family (all `q_proj`, all `down_proj`, …): remove the depth trend with a Theil–Sen line, then robust z-scores (median/MAD). Families need ≥ 16 modules. Thresholds `OUTLIER_Z = 3.5`, `REVIEW_Z = 8.0` are uncalibrated |
+| Structural findings | `detectors/structural.py` | Red flags: full `lm_head` / embedding / router matrices, LoRA on a MoE router, ranks that differ from the declared `r`, code / pickle / archive files next to the adapter. Informational: DoRA, unresolved scale patterns, config problems, target-module mismatch, trainable tokens |
+| Verdict | `scoring/verdict.py` | One rule set; policy `default` or `strict` (below) |
+| Result | `schemas/result.py` | `ScanResult 2.0.0` (pydantic); re-checks fail-closed invariants on construction |
+| Output | `reporters/` | `text`, `json`, `full-json`, `sarif` (SARIF 2.1.0). Text output passes file-derived strings through `reporting/sanitize.py` |
 
-## Component Descriptions
+### Verdict rules
 
-### Parsers
+1. Parsing failed, or part of the file was not analysed → at least `review`.
+2. A module departs from its family with robust |z| ≥ 8 → `review`.
+3. Structural red flag → `review`; `block` under `--policy strict`.
+4. Otherwise → `allow`.
 
-`src/adaptersentry/parsers/` is the only place that touches raw file bytes.
+Without a calibrated reference profile the default policy never blocks, because the
+false-positive rate of a block would be unknown. Reference profiles per model family are
+planned; the result schema already has a place for them (`anomaly.reference`).
 
-- `has_lora_pairs()` performs a key-only header scan — no tensor allocation — to
-  reject non-LoRA formats before any data is loaded.
-- `load_adapter()` reads the file, converts bfloat16 tensors to float32 via the
-  bfloat16 bit-layout identity (`uint16 << 16 → view as float32`), and groups
-  weight matrices into `{layer_name: {"lora_A": ndarray, "lora_B": ndarray}}`.
-- Parser errors are never uncaught exceptions — per-tensor errors surface in
-  `TensorRecord.parse_error`; file-level failures produce `ParseStatus.FAILED`.
+## Memory and speed
 
-### Feature Extraction
+The scan holds one LoRA pair in memory at a time. On a synthetic Llama-3.3-70B-shaped adapter
+(560 modules, r = 64, 1.66 GB bf16) a full scan took about 15 s with about +93 MB peak RSS
+on an 8-CPU machine; streaming the file costs about +32 MB, versus about 3.3 GB to load the
+same file with the 1.x loader.
 
-`src/adaptersentry/features/` computes per-layer statistics. All families operate on
-`ΔW = B @ A` — the effective weight update — rather than on `A` or `B` alone.
-Per-tensor A/B supplementary stats are supplementary signals only.
+## Security invariants
 
-`FeatureExtractor.extract_layer()` (in `engine/feature_extractor.py`) coordinates
-feature family computation and returns a typed `(TensorRecord, list[FeatureFamilyResult],
-list[ScanError])` tuple for each LoRA pair.
+- No `pickle`, `eval` or `exec` on anything from the adapter; pickle-based formats are not
+  read at all.
+- Every size, dtype, shape and offset is validated from the header before allocation.
+- Missing metadata and partial parsing are reported as signals and lower the verdict; they
+  are never ignored.
+- No base model is loaded and no inference is run.
+- Strings from the file are sanitised before they reach a terminal.
 
-See [m1-architecture.md](m1-architecture.md) for per-family implementation details,
-sampling strategies, and fast-mode proxy paths.
+## Further reading
 
-### Detectors
-
-`src/adaptersentry/detectors/` applies anomaly detection logic on top of the feature
-output. Detectors produce typed flags (e.g. `HIGH_KURTOSIS`, `ENERGY_CONCENTRATION`,
-`PARTIALLY_TRAINED`) that feed the scoring stage.
-
-Key detectors and their ensemble weights:
-
-| Detector | Weight | Signal |
-|----------|--------|--------|
-| Kurtosis | 34.0% | Heavy-tailed weights — sparse injection |
-| Energy concentration | 26.5% | Dominant singular value — rank-1 trigger |
-| Wasserstein distance | 13.5% | A vs B distribution asymmetry |
-| Cross-layer consistency | 11.3% | Anomaly concentration in specific layers |
-| Shannon entropy | 6.7% | Near-zero (sparse) or near-uniform (noise) |
-| Z-score outlier rate | 5.3% | Weight fraction beyond ±3σ |
-| IsolationForest | 2.6% | Non-Gaussian structure |
-
-### Scoring
-
-`src/adaptersentry/scoring/` produces the final risk signal.
-
-- `EnsembleDetector.score_families()` — the current typed path; consumes
-  `list[FeatureFamilyResult]` and returns a weighted ensemble score [0–100].
-- `compute_score_breakdown()` — decomposes the ensemble score into 7 per-family
-  sub-scores (parse, metadata, norm, distribution, entropy, similarity,
-  training_pattern) each with a raw score, normalized score, weight, and top reasons.
-- `compute_confidence_score()` — orthogonal to risk; derived only from analysis
-  coverage and data-quality signals (never from anomaly features). Reports
-  `verdict_certainty: high / medium / low`. Circular-logic guard enforced by design.
-
-Risk levels map ensemble scores as follows:
-
-| Level | Score range | Meaning |
-|-------|-------------|---------|
-| LOW | 0–6 | No anomalies detected |
-| MEDIUM | 7–13 | Elevated signal; likely benign, warrants review |
-| HIGH | 14–35 | Multiple independent detectors agree; manual inspection required |
-| CRITICAL | 36–100 | Strong multi-signal evidence; do not load without thorough review |
-
-### Schemas
-
-`src/adaptersentry/schemas/` contains all Pydantic models (`extra="ignore"` on engine
-schemas for forward compatibility). The two stable public contracts are:
-
-- `AdapterReport` v1.0.0 — returned by `adaptersentry.scan()` and `--format json`
-- `ScanResult` v1.0.0 — returned by the batch engine and `--format summary-json`
-
-`scan_id` in `ScanResult` is deterministic: `sha256(content_hash + ':' + config_hash + ':' + schema_version)`.
-Same file with the same configuration always produces the same `scan_id`.
-
-### Reporting
-
-`src/adaptersentry/reporting/` sits between the schema layer and the output formatters.
-
-- `rank_layer_findings()` — ranks the top-10 most suspicious LoRA layers by severity
-  score, with triggered families, stable `RULE_CATALOG` wording, and a
-  `remediation_hint`.
-- `render_human_summary()` — fixed-block CLI output: compact default (VERDICT, TOP
-  SIGNALS, FINDINGS) plus an optional verbose block (SCORE BREAKDOWN, TOP SUSPICIOUS
-  LAYERS, ANALYSIS QUALITY).
-
-### Reporters
-
-`src/adaptersentry/reporters/` formats the output for each consumer:
-
-| Format | Flag | Contract stability |
-|--------|------|--------------------|
-| Text (ANSI) | `--format text` (default) | Not a machine contract |
-| Summary JSON | `--format summary-json` | Stable — `ScanResult` v1.0.0 |
-| Debug JSON | `--format debug-json` | Unstable — local debugging only |
-| SARIF 2.1.0 | `--format sarif` | Stable — GitHub code scanning |
-
----
-
-## Batch Scan Engine
-
-For large-scale scanning, the CLI command `adaptersentry batch` wraps the M1 analyzer
-in a production-grade pipeline:
-
-```
-adaptersentry batch --input-dir ./adapters --workers 8 --mode fast
-        │
-        ▼
-┌───────────────┐
-│  cli/batch.py │  argument parsing, run_id generation
-└───────┬───────┘
-        │
-        ▼
-┌────────────────────────────────────────────────┐
-│  engine/orchestrator.py (or orchestrator_ray.py│
-│  when --backend ray)                           │
-│    build_manifest() — resolve paths, dedup     │
-│    run_batch()      — worker pool management   │
-│    resume_after_failure() — crash recovery     │
-└───────┬────────────────────────────────────────┘
-        │ per-adapter ScanRequest
-        ▼
-┌────────────────────────────────────────────────┐
-│  engine/worker.py   worker_main()              │
-│    Phase 1 — Identity:  BLAKE3/SHA256 hash     │
-│    Phase 2 — Cache:     CacheStore.lookup()    │
-│    Phase 3 — Analysis:  analyzer.scan()        │
-│    Phase 4 — Assemble:  ScanResult + DebugReport│
-└───────┬────────────────────────────────────────┘
-        │
-        ▼
-┌────────────────────────────────────────────────┐
-│  engine/result_sink.py   atomic write          │
-│  engine/cache.py         content-addressed store│
-│  engine/manifest.py      SQLite job state      │
-└────────────────────────────────────────────────┘
-```
-
-Key engine properties:
-
-- **Content-addressed cache** — `CacheStore` uses `(content_hash, config_hash)` as the
-  cache key. A config or mode change automatically invalidates stale entries.
-- **Resumable execution** — `ManifestDB` (SQLite WAL) tracks `pending → queued →
-  leased → persisted` state. `--resume` resets non-terminal jobs without re-processing
-  completed ones.
-- **Atomic writes** — `ResultSink` writes to a `.tmp` file, fsyncs, then renames
-  (atomic on POSIX). A process kill never produces a partial result.
-- **Two backends** — `--backend mp` uses `multiprocessing.Pool(spawn)` (default);
-  `--backend ray` uses a persistent Ray actor pool with `max_restarts=3` crash
-  isolation and optional multi-node scaling.
-
-See [scan-engine.md](scan-engine.md) for the full engine architecture including the
-Ray actor pool, Rust hot-path extensions, and crash recovery details.
-
----
-
-## Scan Modes
-
-Both `adaptersentry scan` and `adaptersentry batch` accept `--mode full|fast`:
-
-| | `--mode full` | `--mode fast` |
-|--|--------------|--------------|
-| Use for | Security audits, final verification | Corpus screening, CI pre-filter |
-| ΔW norm | float32 B@A materialized | Cholesky path, no ΔW materialization |
-| ΔW distribution | B@A + 50K stride-sample | lora_A rows as proxy |
-| IsolationForest | Always (20 trees, 2K samples) | Skipped |
-| Entropy/compression | O(n), always | O(n), always |
-| Inter-layer similarity | ΔW stride-sampled to 10K | lora_A rows to 10K |
-| Typical single adapter | ~40s (168-layer adapter) | ~4.5s (168-layer adapter) |
-
-The recommended workflow for large corpora:
-
-```
-Large corpus → adaptersentry batch --mode fast
-                    │
-                    ├── LOW / MEDIUM → allow or manual review
-                    └── HIGH / CRITICAL → adaptersentry scan --mode full
-```
-
-Fast and full scans produce different `scan_id` values because `scan_mode` is
-included in `config_hash`. A fast result never serves as a cache hit for a full
-scan request.
-
-See [scan-modes.md](scan-modes.md) for detection equivalence analysis and per-signal
-sensitivity differences between modes.
-
----
-
-## Performance at a Glance (8-CPU VPS, v1.0.0)
-
-| Mode | Backend | Workers | Throughput | Notes |
-|------|---------|---------|-----------|-------|
-| `fast` | mp | 8 | 203/min | 2.5 min for 500 adapters |
-| `fast` | ray | 8 | 211/min | 2.4 min |
-| `full` | mp | 4 | 22/min | 22.5 min |
-| `full` | ray | 8 | 38/min | 13.3 min |
-| `full` | ray + rust | 8 | **69/min** | 7.2 min — Rust hot-path (OPT-04) |
-
-The Rust extension (`adaptersentry-rs/`, built with PyO3 + maturin) accelerates
-`isolation_score_1d` (334×), `tensor_stats_f32` (2.4×), `byte_entropy` (4.5×), and
-`sign_stats` (2×). All functions have Python fallbacks — the scanner is fully
-functional without Rust.
-
----
-
----
-
-## Architecture Documents
-
-| Document | Description |
-|----------|-------------|
-| [m1-architecture.md](m1-architecture.md) | Full parser → features → detectors → scoring → report pipeline with per-family implementation detail |
-| [scan-engine.md](scan-engine.md) | Batch scan engine: worker pool, cache, manifest, Ray actor pool, Rust extensions, crash recovery |
-| [scan-modes.md](scan-modes.md) | `fast` vs `full`: what changes, detection equivalence, recommended workflow |
-| [open-core-boundary.md](open-core-boundary.md) | OSS / commercial boundary; public API contract |
-| [repo-layout.md](repo-layout.md) | Directory layout of the installable OSS package |
+- [scan-modes.md](scan-modes.md) — `full` vs `fast`
+- [scan-engine.md](scan-engine.md) — batch engine: manifest, cache, workers
+- [repo-layout.md](repo-layout.md) — directory layout
+- [open-core-boundary.md](open-core-boundary.md) — public API and project scope
+- [../output-schema/scan-result.md](../output-schema/scan-result.md) — result fields

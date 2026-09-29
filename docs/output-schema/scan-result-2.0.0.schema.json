@@ -1316,7 +1316,7 @@
       "type": "string"
     },
     "Severity": {
-      "description": "Shared severity enumeration used by both Finding and RiskSummary.",
+      "description": "Ordered severity: LOW < MEDIUM < HIGH < CRITICAL.",
       "enum": [
         "LOW",
         "MEDIUM",

@@ -21,12 +21,16 @@ as *investigation candidates*; they do not confirm malicious content.
 
 1. **Discovery**: `benchmarks.hub_scanner.load_or_discover_candidates()` — queries Hub API,
    filters by file presence and size, saves a `candidates.json` for reproducibility.
-2. **Architecture check**: `adaptersentry.parsers.safetensors.check_lora_architecture()` —
-   counts matched `lora_A/lora_B` pairs.  Adapters with < 2 pairs are classified
-   `unsupported_architecture` and excluded from risk statistics.
-3. **M1 analysis**: `adaptersentry.analyzer.analyze()` — full per-layer analysis.
-4. **Reporting**: `benchmarks.report.write_aggregate()` — aggregate statistics,
-   percentiles, and top-suspicious lists.
+2. **Download**: adapter and `adapter_config.json`, pinned to the Hub commit `sha` found at
+   discovery, so a re-run scans the same files.
+3. **M1 analysis**: `adaptersentry.scanner.scan()` — a `ScanResult 2.0.0` per adapter. A failed
+   scan whose error is "no LoRA A/B pair" is classified `unsupported_architecture`; other
+   failures are `analysis_failed`.
+4. **Reporting**: `benchmarks.report.write_aggregate()` — distributions of verdict action,
+   level, reason codes and training state, `max_robust_z` percentiles, and top lists by
+   intra-adapter z and by structural reason codes. These distributions describe the
+   scanner's behaviour on public adapters; they are not a detection rate (intra-adapter
+   thresholds are uncalibrated and the adapters are unlabelled).
 
 ## Output artifacts
 
