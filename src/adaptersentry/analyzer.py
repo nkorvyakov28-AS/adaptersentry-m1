@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from adaptersentry.detectors.cross_layer import detect_cross_layer_anomalies
 from adaptersentry.detectors.entropy import compute_entropy, detect_entropy_anomalies
 from adaptersentry.detectors.init_detector import (
@@ -66,6 +68,39 @@ def _risk_level(score: int) -> str:
 # ---------------------------------------------------------------------------
 
 _MAX_SAFE_METADATA_DEPTH = 5
+
+# Skipped tensors listed individually in errors; the rest are summarised.
+_MAX_LISTED_SKIPPED = 20
+
+
+def _degraded_layer_record(
+    tensor_A: Any, tensor_B: Any, flag: str, *, parse_error: str = "degraded",
+) -> dict[str, Any]:
+    """Minimal layer record for a layer that could not be analysed.
+
+    Keeps the layer visible in the report so cross-layer detectors and the
+    verdict account for it.
+    """
+    return {
+        "shape_A": list(tensor_A.shape),
+        "shape_B": list(tensor_B.shape),
+        "rank": 0,
+        "energy_concentration": 0.0,
+        "kurtosis_A": 0.0,
+        "kurtosis_B": 0.0,
+        "mean_A": 0.0,
+        "std_A": 0.0,
+        "mean_B": 0.0,
+        "std_B": 0.0,
+        "skewness_A": 0.0,
+        "entropy_A": 0.0,
+        "entropy_B": 0.0,
+        "zscore_outlier_rate_A": 0.0,
+        "zscore_outlier_rate_B": 0.0,
+        "isolation_score_A": None,
+        "flags": [flag],
+        "parse_error": parse_error,
+    }
 
 
 def _run_analysis(
@@ -116,6 +151,18 @@ def _run_analysis(
 
         if tensor_A is None or tensor_B is None:
             logger.debug("Skipping incomplete pair for layer: %s", layer_name)
+            continue
+
+        # Non-finite weights silently disable every threshold (NaN comparisons are
+        # False) and can crash native code paths, so the layer is excluded and the
+        # scan is marked degraded instead of reported as clean.
+        if not (np.isfinite(tensor_A).all() and np.isfinite(tensor_B).all()):
+            logger.warning("Layer %r: non-finite weights — marking degraded", layer_name)
+            nonfinite_flag = "NON_FINITE_WEIGHTS: layer contains NaN or Inf values"
+            all_flags.append(nonfinite_flag)
+            layer_reports[layer_name] = _degraded_layer_record(
+                tensor_A, tensor_B, nonfinite_flag, parse_error="malformed",
+            )
             continue
 
         _il_pairs.append((layer_name, _il_idx, tensor_A, tensor_B))
@@ -170,26 +217,7 @@ def _run_analysis(
             logger.warning("Layer %r: analysis failed — marking degraded: %s", layer_name, exc)
             degraded_flag = f"DEGRADED_LAYER: analysis failed — {exc}"
             all_flags.append(degraded_flag)
-            layer_reports[layer_name] = {
-                "shape_A": list(tensor_A.shape),
-                "shape_B": list(tensor_B.shape),
-                "rank": 0,
-                "energy_concentration": 0.0,
-                "kurtosis_A": 0.0,
-                "kurtosis_B": 0.0,
-                "mean_A": 0.0,
-                "std_A": 0.0,
-                "mean_B": 0.0,
-                "std_B": 0.0,
-                "skewness_A": 0.0,
-                "entropy_A": 0.0,
-                "entropy_B": 0.0,
-                "zscore_outlier_rate_A": 0.0,
-                "zscore_outlier_rate_B": 0.0,
-                "isolation_score_A": None,
-                "flags": [degraded_flag],
-                "parse_error": "degraded",
-            }
+            layer_reports[layer_name] = _degraded_layer_record(tensor_A, tensor_B, degraded_flag)
 
     # Init-only detection and flag suppression
     training_status = get_adapter_training_status(layer_reports)
@@ -224,6 +252,8 @@ def _run_analysis(
     for layer_name, pair in layers.items():
         tensor_A = pair.get("A")
         tensor_B = pair.get("B")
+        if layer_reports.get(layer_name, {}).get("parse_error"):
+            continue
         if tensor_A is not None and tensor_B is not None:
             try:
                 w2 = compute_wasserstein_distance(tensor_A, tensor_B)
