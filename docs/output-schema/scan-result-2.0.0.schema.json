@@ -1,0 +1,1521 @@
+{
+  "$defs": {
+    "AdapterInfo": {
+      "description": "What the adapter is, as declared and as measured.",
+      "properties": {
+        "format": {
+          "enum": [
+            "peft_lora",
+            "kohya_lora",
+            "unknown"
+          ],
+          "title": "Format",
+          "type": "string"
+        },
+        "peft_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Peft Type"
+        },
+        "base_model_declared": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Model Declared"
+        },
+        "base_family": {
+          "default": "unknown",
+          "description": "llama, qwen, gemma, mistral, … or unknown.",
+          "title": "Base Family",
+          "type": "string"
+        },
+        "base_family_source": {
+          "default": "unknown",
+          "enum": [
+            "config",
+            "shapes",
+            "unknown"
+          ],
+          "title": "Base Family Source",
+          "type": "string"
+        },
+        "n_model_layers": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "N Model Layers"
+        },
+        "rank_declared": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rank Declared"
+        },
+        "rank_actual": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RankInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "lora_alpha": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lora Alpha"
+        },
+        "scaling": {
+          "default": "unknown",
+          "enum": [
+            "alpha_over_r",
+            "rslora",
+            "pattern",
+            "unknown"
+          ],
+          "title": "Scaling",
+          "type": "string"
+        },
+        "init_method": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Init Method"
+        },
+        "use_dora": {
+          "default": false,
+          "title": "Use Dora",
+          "type": "boolean"
+        },
+        "target_modules_declared": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Target Modules Declared",
+          "type": "array"
+        },
+        "target_modules_actual": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Target Modules Actual",
+          "type": "array"
+        },
+        "modules_to_save": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Modules To Save",
+          "type": "array"
+        },
+        "trainable_token_indices": {
+          "default": false,
+          "title": "Trainable Token Indices",
+          "type": "boolean"
+        },
+        "moe": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MoEInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "training_state": {
+          "default": "unknown",
+          "enum": [
+            "trained",
+            "init_only",
+            "partial",
+            "unknown"
+          ],
+          "title": "Training State",
+          "type": "string"
+        },
+        "metadata_present": {
+          "default": false,
+          "title": "Metadata Present",
+          "type": "boolean"
+        },
+        "config_present": {
+          "default": false,
+          "title": "Config Present",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "format"
+      ],
+      "title": "AdapterInfo",
+      "type": "object"
+    },
+    "Anomaly": {
+      "description": "What the verdict rests on.",
+      "properties": {
+        "intra": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IntraAnomaly"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reference": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReferenceComparison"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "token_concentration": {
+          "items": {
+            "$ref": "#/$defs/TokenConcentration"
+          },
+          "title": "Token Concentration",
+          "type": "array"
+        },
+        "top_contributors": {
+          "items": {
+            "$ref": "#/$defs/Contributor"
+          },
+          "maxItems": 10,
+          "title": "Top Contributors",
+          "type": "array"
+        }
+      },
+      "title": "Anomaly",
+      "type": "object"
+    },
+    "Artifact": {
+      "description": "Identity of the scanned file.",
+      "properties": {
+        "content_hash": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Content Hash",
+          "type": "string"
+        },
+        "header_hash": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Header Hash",
+          "type": "string"
+        },
+        "logical_id": {
+          "title": "Logical Id",
+          "type": "string"
+        },
+        "file_size_bytes": {
+          "minimum": 0,
+          "title": "File Size Bytes",
+          "type": "integer"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        }
+      },
+      "required": [
+        "content_hash",
+        "header_hash",
+        "logical_id",
+        "file_size_bytes",
+        "provenance"
+      ],
+      "title": "Artifact",
+      "type": "object"
+    },
+    "Confidence": {
+      "description": "How much to trust the verdict, and what limits it.",
+      "properties": {
+        "level": {
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ],
+          "title": "Level",
+          "type": "string"
+        },
+        "limiting_factors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Limiting Factors",
+          "type": "array"
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "title": "Confidence",
+      "type": "object"
+    },
+    "Contributor": {
+      "description": "One of the strongest contributions to the anomaly assessment.",
+      "properties": {
+        "feature": {
+          "title": "Feature",
+          "type": "string"
+        },
+        "module_type": {
+          "title": "Module Type",
+          "type": "string"
+        },
+        "layer": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Layer"
+        },
+        "head": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Head"
+        },
+        "expert": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expert"
+        },
+        "value": {
+          "title": "Value",
+          "type": "number"
+        },
+        "z": {
+          "title": "Z",
+          "type": "number"
+        }
+      },
+      "required": [
+        "feature",
+        "module_type",
+        "value",
+        "z"
+      ],
+      "title": "Contributor",
+      "type": "object"
+    },
+    "Coverage": {
+      "description": "What was analysed. Anything not analysed may carry the payload.",
+      "properties": {
+        "n_tensors_total": {
+          "minimum": 0,
+          "title": "N Tensors Total",
+          "type": "integer"
+        },
+        "n_tensors_analyzed": {
+          "minimum": 0,
+          "title": "N Tensors Analyzed",
+          "type": "integer"
+        },
+        "n_modules": {
+          "minimum": 0,
+          "title": "N Modules",
+          "type": "integer"
+        },
+        "n_modules_analyzed": {
+          "minimum": 0,
+          "title": "N Modules Analyzed",
+          "type": "integer"
+        },
+        "n_not_analyzed": {
+          "description": "Total count; the list below is capped.",
+          "minimum": 0,
+          "title": "N Not Analyzed",
+          "type": "integer"
+        },
+        "not_analyzed": {
+          "items": {
+            "$ref": "#/$defs/NotAnalyzed"
+          },
+          "title": "Not Analyzed",
+          "type": "array"
+        },
+        "non_finite_modules": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Non Finite Modules",
+          "type": "array"
+        }
+      },
+      "required": [
+        "n_tensors_total",
+        "n_tensors_analyzed",
+        "n_modules",
+        "n_modules_analyzed",
+        "n_not_analyzed"
+      ],
+      "title": "Coverage",
+      "type": "object"
+    },
+    "DepthSpike": {
+      "description": "A layer whose value departs from the robust depth trend of its module family.",
+      "properties": {
+        "module_type": {
+          "title": "Module Type",
+          "type": "string"
+        },
+        "layer": {
+          "minimum": 0,
+          "title": "Layer",
+          "type": "integer"
+        },
+        "z": {
+          "title": "Z",
+          "type": "number"
+        }
+      },
+      "required": [
+        "module_type",
+        "layer",
+        "z"
+      ],
+      "title": "DepthSpike",
+      "type": "object"
+    },
+    "ErrorCategory": {
+      "description": "Top-level taxonomy for scan errors.",
+      "enum": [
+        "malformed",
+        "unsupported",
+        "degraded"
+      ],
+      "title": "ErrorCategory",
+      "type": "string"
+    },
+    "ErrorSeverity": {
+      "description": "How much a scan error impacts the final result.",
+      "enum": [
+        "fatal",
+        "degraded",
+        "warning"
+      ],
+      "title": "ErrorSeverity",
+      "type": "string"
+    },
+    "Finding": {
+      "description": "A human-readable finding.",
+      "properties": {
+        "rule_id": {
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "message": {
+          "default": "",
+          "title": "Message",
+          "type": "string"
+        },
+        "evidence": {
+          "additionalProperties": true,
+          "title": "Evidence",
+          "type": "object"
+        },
+        "locations": {
+          "items": {
+            "$ref": "#/$defs/Location"
+          },
+          "title": "Locations",
+          "type": "array"
+        },
+        "remediation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remediation"
+        }
+      },
+      "required": [
+        "rule_id",
+        "severity",
+        "title"
+      ],
+      "title": "Finding",
+      "type": "object"
+    },
+    "HeadRecord": {
+      "description": "Features of one attention head (opt-in).",
+      "properties": {
+        "head": {
+          "minimum": 0,
+          "title": "Head",
+          "type": "integer"
+        },
+        "features": {
+          "$ref": "#/$defs/ModuleFeatures"
+        }
+      },
+      "required": [
+        "head",
+        "features"
+      ],
+      "title": "HeadRecord",
+      "type": "object"
+    },
+    "IntraAnomaly": {
+      "description": "Comparison of modules within this adapter (needs no reference profile).",
+      "properties": {
+        "max_robust_z": {
+          "minimum": 0.0,
+          "title": "Max Robust Z",
+          "type": "number"
+        },
+        "n_outlier_modules": {
+          "minimum": 0,
+          "title": "N Outlier Modules",
+          "type": "integer"
+        },
+        "depth_spikes": {
+          "items": {
+            "$ref": "#/$defs/DepthSpike"
+          },
+          "title": "Depth Spikes",
+          "type": "array"
+        },
+        "energy_gini": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Energy Gini"
+        },
+        "logrms_dispersion": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Logrms Dispersion",
+          "type": "object"
+        },
+        "attn_mlp_ratio": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attn Mlp Ratio"
+        }
+      },
+      "required": [
+        "max_robust_z",
+        "n_outlier_modules"
+      ],
+      "title": "IntraAnomaly",
+      "type": "object"
+    },
+    "Location": {
+      "description": "Where in the adapter a finding applies.",
+      "properties": {
+        "layer": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Layer"
+        },
+        "module": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Module"
+        },
+        "head": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Head"
+        },
+        "expert": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expert"
+        },
+        "tensor_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tensor Key"
+        }
+      },
+      "title": "Location",
+      "type": "object"
+    },
+    "MoEInfo": {
+      "description": "Mixture-of-experts structure of the adapted model.",
+      "properties": {
+        "n_experts": {
+          "minimum": 0,
+          "title": "N Experts",
+          "type": "integer"
+        },
+        "router_adapted": {
+          "description": "A LoRA is applied to the expert router.",
+          "title": "Router Adapted",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "n_experts",
+        "router_adapted"
+      ],
+      "title": "MoEInfo",
+      "type": "object"
+    },
+    "ModuleFeatures": {
+      "description": "Exact features of the effective update ΔW = s·B·A of one module.",
+      "properties": {
+        "log_rms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Log Rms"
+        },
+        "log_sigma1": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Log Sigma1"
+        },
+        "top1_e": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Top1 E"
+        },
+        "srank_r": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Srank R"
+        },
+        "pr_r": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pr R"
+        },
+        "spec_h": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Spec H"
+        },
+        "excess_conc": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Excess Conc"
+        },
+        "kurt_dw": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kurt Dw"
+        },
+        "row_hoyer": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Row Hoyer"
+        },
+        "row_gini": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Row Gini"
+        },
+        "row_top8": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Row Top8"
+        },
+        "col_hoyer": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Col Hoyer"
+        }
+      },
+      "title": "ModuleFeatures",
+      "type": "object"
+    },
+    "ModuleRecord": {
+      "description": "One LoRA A/B pair.",
+      "properties": {
+        "layer": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Layer"
+        },
+        "module": {
+          "title": "Module",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "attention",
+            "mlp",
+            "embedding",
+            "lm_head",
+            "router",
+            "other"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "expert": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expert"
+        },
+        "shape_a": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Shape A",
+          "type": "array"
+        },
+        "shape_b": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Shape B",
+          "type": "array"
+        },
+        "rank": {
+          "minimum": 0,
+          "title": "Rank",
+          "type": "integer"
+        },
+        "scale": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scale"
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "not_analyzed",
+            "non_finite"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "features": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModuleFeatures"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "z": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Z",
+          "type": "object"
+        },
+        "heads": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/HeadRecord"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Heads"
+        }
+      },
+      "required": [
+        "module",
+        "kind",
+        "shape_a",
+        "shape_b",
+        "rank",
+        "status"
+      ],
+      "title": "ModuleRecord",
+      "type": "object"
+    },
+    "NotAnalyzed": {
+      "description": "A tensor present in the file that was not analysed.",
+      "properties": {
+        "tensor_key": {
+          "title": "Tensor Key",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "category": {
+          "enum": [
+            "malformed",
+            "unsupported",
+            "degraded"
+          ],
+          "title": "Category",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tensor_key",
+        "reason",
+        "category"
+      ],
+      "title": "NotAnalyzed",
+      "type": "object"
+    },
+    "Provenance": {
+      "description": "Where the file came from.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "local_path",
+            "hf_hub"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "File name by default; the absolute path only when full paths are requested.",
+          "title": "Path"
+        },
+        "hf_repo_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hf Repo Id"
+        },
+        "hf_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hf Revision"
+        },
+        "config_file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "adapter_config.json found next to the file.",
+          "title": "Config File"
+        },
+        "sibling_files": {
+          "items": {
+            "$ref": "#/$defs/SiblingFile"
+          },
+          "title": "Sibling Files",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "Provenance",
+      "type": "object"
+    },
+    "RankInfo": {
+      "description": "LoRA rank measured from tensor shapes.",
+      "properties": {
+        "min": {
+          "minimum": 0,
+          "title": "Min",
+          "type": "integer"
+        },
+        "max": {
+          "minimum": 0,
+          "title": "Max",
+          "type": "integer"
+        },
+        "distinct": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Distinct",
+          "type": "array"
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ],
+      "title": "RankInfo",
+      "type": "object"
+    },
+    "Reason": {
+      "description": "Why the verdict is what it is.",
+      "properties": {
+        "code": {
+          "description": "PARSE_FAILED, DEGRADED_PARSE, NO_REFERENCE_PROFILE, INTRA_OUTLIER, …",
+          "title": "Code",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "severity",
+        "message"
+      ],
+      "title": "Reason",
+      "type": "object"
+    },
+    "ReferenceComparison": {
+      "description": "Comparison against a calibrated profile of benign adapters.",
+      "properties": {
+        "profile_id": {
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "profile_version": {
+          "title": "Profile Version",
+          "type": "string"
+        },
+        "stratum": {
+          "title": "Stratum",
+          "type": "string"
+        },
+        "n_reference": {
+          "minimum": 1,
+          "title": "N Reference",
+          "type": "integer"
+        },
+        "distance": {
+          "minimum": 0.0,
+          "title": "Distance",
+          "type": "number"
+        },
+        "p_value": {
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "P Value",
+          "type": "number"
+        },
+        "alpha_review": {
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Alpha Review",
+          "type": "number"
+        },
+        "alpha_block": {
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Alpha Block",
+          "type": "number"
+        }
+      },
+      "required": [
+        "profile_id",
+        "profile_version",
+        "stratum",
+        "n_reference",
+        "distance",
+        "p_value",
+        "alpha_review",
+        "alpha_block"
+      ],
+      "title": "ReferenceComparison",
+      "type": "object"
+    },
+    "ScanError": {
+      "description": "Normalized scan error — goes into AdapterReport.errors / ScanResult.errors.\n\n``code`` is a short upper-case string identifying the error.  Canonical values\nare defined in ``ErrorCode``; callers should treat ``code`` as advisory — future\nversions may emit codes not present in the current ``ErrorCode`` enum.  Always\nbranch on ``category`` for reliable machine processing; use ``code`` only for\nlogging and display.",
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/ErrorCategory"
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScanPhase"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "severity": {
+          "$ref": "#/$defs/ErrorSeverity",
+          "default": "degraded"
+        }
+      },
+      "required": [
+        "category",
+        "code",
+        "message"
+      ],
+      "title": "ScanError",
+      "type": "object"
+    },
+    "ScanInfo": {
+      "description": "Who scanned, when, and how.",
+      "properties": {
+        "scan_id": {
+          "description": "sha256(content_hash:config_hash:schema_version); deterministic.",
+          "title": "Scan Id",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Batch run identifier, if any.",
+          "title": "Run Id"
+        },
+        "analyzer_version": {
+          "title": "Analyzer Version",
+          "type": "string"
+        },
+        "config_hash": {
+          "description": "Hash of analysis settings, including mode and policy.",
+          "title": "Config Hash",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "fast",
+            "full"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "policy": {
+          "description": "Verdict policy; 'strict' may block on structural red flags.",
+          "enum": [
+            "default",
+            "strict"
+          ],
+          "title": "Policy",
+          "type": "string"
+        },
+        "started_at": {
+          "description": "ISO 8601 UTC.",
+          "title": "Started At",
+          "type": "string"
+        },
+        "completed_at": {
+          "description": "ISO 8601 UTC.",
+          "title": "Completed At",
+          "type": "string"
+        },
+        "wall_time_ms": {
+          "minimum": 0,
+          "title": "Wall Time Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "scan_id",
+        "analyzer_version",
+        "config_hash",
+        "mode",
+        "policy",
+        "started_at",
+        "completed_at",
+        "wall_time_ms"
+      ],
+      "title": "ScanInfo",
+      "type": "object"
+    },
+    "ScanPhase": {
+      "description": "Pipeline phase where the error occurred.",
+      "enum": [
+        "parse",
+        "metadata",
+        "feature",
+        "scoring",
+        "reporting",
+        "behavioral"
+      ],
+      "title": "ScanPhase",
+      "type": "string"
+    },
+    "Severity": {
+      "description": "Shared severity enumeration used by both Finding and RiskSummary.",
+      "enum": [
+        "LOW",
+        "MEDIUM",
+        "HIGH",
+        "CRITICAL"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "SiblingFile": {
+      "description": "A file found next to the adapter that deserves attention.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "code",
+            "pickle",
+            "archive",
+            "other"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "kind"
+      ],
+      "title": "SiblingFile",
+      "type": "object"
+    },
+    "TokenConcentration": {
+      "description": "How concentrated an update of lm_head / embed_tokens is on a few tokens.",
+      "properties": {
+        "module": {
+          "title": "Module",
+          "type": "string"
+        },
+        "top_token_ids": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Top Token Ids",
+          "type": "array"
+        },
+        "top_shares": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Top Shares",
+          "type": "array"
+        },
+        "hoyer": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Hoyer",
+          "type": "number"
+        },
+        "gini": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Gini",
+          "type": "number"
+        }
+      },
+      "required": [
+        "module",
+        "hoyer",
+        "gini"
+      ],
+      "title": "TokenConcentration",
+      "type": "object"
+    },
+    "Verdict": {
+      "description": "What automated enforcement should do. Read this field.",
+      "properties": {
+        "action": {
+          "enum": [
+            "allow",
+            "review",
+            "block"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "level": {
+          "$ref": "#/$defs/Severity"
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/Reason"
+          },
+          "title": "Reasons",
+          "type": "array"
+        },
+        "m2_recommended": {
+          "description": "Behavioural verification is recommended.",
+          "title": "M2 Recommended",
+          "type": "boolean"
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        }
+      },
+      "required": [
+        "action",
+        "level",
+        "m2_recommended",
+        "confidence"
+      ],
+      "title": "Verdict",
+      "type": "object"
+    }
+  },
+  "description": "AdapterSentry M1 result, schema 2.0.0.",
+  "properties": {
+    "schema_version": {
+      "default": "2.0.0",
+      "pattern": "^2\\.\\d+\\.\\d+$",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "scan": {
+      "$ref": "#/$defs/ScanInfo"
+    },
+    "artifact": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Artifact"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Null only when the file could not be read at all."
+    },
+    "adapter": {
+      "$ref": "#/$defs/AdapterInfo"
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "degraded",
+        "failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "coverage": {
+      "$ref": "#/$defs/Coverage"
+    },
+    "verdict": {
+      "$ref": "#/$defs/Verdict"
+    },
+    "anomaly": {
+      "$ref": "#/$defs/Anomaly"
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/Finding"
+      },
+      "title": "Findings",
+      "type": "array"
+    },
+    "modules": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/ModuleRecord"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Per-module detail; present only when requested.",
+      "title": "Modules"
+    },
+    "errors": {
+      "items": {
+        "$ref": "#/$defs/ScanError"
+      },
+      "title": "Errors",
+      "type": "array"
+    }
+  },
+  "required": [
+    "scan",
+    "adapter",
+    "status",
+    "coverage",
+    "verdict"
+  ],
+  "title": "ScanResult",
+  "type": "object"
+}
