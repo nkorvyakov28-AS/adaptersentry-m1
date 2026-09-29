@@ -140,7 +140,10 @@ def read_adapter_config(adapter_path: Path) -> ConfigReadResult:
     Never raises: a missing config is normal for bare .safetensors files, and a
     bad one is reported in ``problems``.
     """
-    candidate = adapter_path.resolve().parent / CONFIG_FILENAME
+    # Look next to the path as given, not next to a symlink target: in the Hugging
+    # Face cache the adapter is snapshots/<rev>/adapter_model.safetensors -> blobs/<hash>,
+    # and adapter_config.json lives in the snapshot directory, not among the blobs.
+    candidate = adapter_path.absolute().parent / CONFIG_FILENAME
     try:
         if not candidate.exists():
             return ConfigReadResult()

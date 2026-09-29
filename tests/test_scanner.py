@@ -107,6 +107,22 @@ class TestStructural:
         assert "SIBLING_EXECUTABLE" in {r.code for r in result.verdict.reasons}
         assert result.artifact.provenance.sibling_files[0].kind == "code"
 
+    def test_hf_cache_layout_uses_the_snapshot_directory(self, tmp_path: Path) -> None:
+        # Hub cache: snapshots/<rev>/adapter_model.safetensors -> ../../blobs/<hash>, with
+        # adapter_config.json and any code files in the snapshot directory, not among blobs.
+        blob = _write_adapter(tmp_path / "blobs", name="0123abcd.safetensors",
+                              config={"peft_type": "LORA", "r": 8, "lora_alpha": 32})
+        (tmp_path / "blobs" / "adapter_config.json").unlink()
+        snapshot = tmp_path / "snapshots" / "rev"
+        snapshot.mkdir(parents=True)
+        (snapshot / "adapter_config.json").write_text('{"peft_type": "LORA", "r": 8, "lora_alpha": 32}')
+        (snapshot / "handler.py").write_text("print('hi')\n")
+        link = snapshot / "adapter_model.safetensors"
+        link.symlink_to(blob)
+        result = scan(link)
+        assert result.adapter.config_present is True and result.adapter.lora_alpha == 32.0
+        assert "SIBLING_EXECUTABLE" in {r.code for r in result.verdict.reasons}
+
     def test_rank_mismatch(self, tmp_path: Path) -> None:
         path = _write_adapter(tmp_path / "rank", config={"peft_type": "LORA", "r": 4, "lora_alpha": 8})
         assert "RANK_MISMATCH" in {r.code for r in scan(path).verdict.reasons}

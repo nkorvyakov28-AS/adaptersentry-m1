@@ -51,7 +51,7 @@ def find_siblings(adapter_path: Path) -> list[SiblingFile]:
     """Code, pickle and archive files in the adapter's directory (non-recursive, bounded)."""
     out: list[SiblingFile] = []
     try:
-        directory = adapter_path.resolve().parent
+        directory = adapter_path.absolute().parent  # as given: see read_adapter_config
         for i, entry in enumerate(directory.iterdir()):
             if i >= _MAX_SIBLINGS_SCANNED:
                 break
