@@ -5,9 +5,21 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: CI only reads the repository.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+# Third-party actions are pinned by commit SHA (tag in the comment) so a
+# moved or compromised tag cannot change what runs here.
+env:
+  UV_VERSION: "0.11.11"
+  GITLEAKS_VERSION: "8.30.1"
+  GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+  PIP_AUDIT_VERSION: "2.10.1"
 
 jobs:
   test:
@@ -18,34 +30,73 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
-
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
+          persist-credentials: false
 
-      - name: Install package and dev dependencies
-        run: pip install -e ".[dev]"
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --frozen --extra dev --python ${{ matrix.python-version }}
 
       - name: Run test suite
-        run: pytest tests/ -q --tb=short
+        run: uv run --frozen pytest tests/ -q --tb=short
 
-  lint:
-    name: Import check
+  import-check:
+    name: Import check (runtime dependencies only)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: "3.11"
-          cache: pip
-      - run: pip install -e ".[dev]"
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Install without extras
+        run: uv sync --frozen --python 3.11
       - name: Check package imports
-        run: python -c "import adaptersentry; print(adaptersentry.__version__)"
+        run: uv run --frozen python -c "import adaptersentry; print(adaptersentry.__version__)"
       - name: Check CLI entry point
-        run: adaptersentry --version
+        run: uv run --frozen adaptersentry --version
+
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks (checksum-verified)
+        run: |
+          curl -sSfL -o gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum --check --strict
+          tar xzf gitleaks.tgz gitleaks
+      - name: Scan full history
+        run: ./gitleaks git --redact --no-banner --exit-code 1 .
+
+  dependency-audit:
+    name: Dependency audit (pip-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Export locked dependencies with hashes
+        run: uv export --frozen --all-extras --no-emit-project --format requirements-txt -o locked.txt
+      - name: Audit
+        run: >-
+          uvx --from "pip-audit==${PIP_AUDIT_VERSION}" pip-audit
+          -r locked.txt --require-hashes --no-deps --disable-pip --progress-spinner off

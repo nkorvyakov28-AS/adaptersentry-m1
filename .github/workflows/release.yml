@@ -5,40 +5,87 @@ on:
     tags:
       - "v*.*.*"
 
-permissions:
-  contents: write
-  id-token: write
+# No default token permissions; each job asks only for what it needs.
+permissions: {}
+
+env:
+  UV_VERSION: "0.11.11"
 
 jobs:
-  build-and-publish:
-    name: Build and publish to PyPI
+  build:
+    name: Test and build
     runs-on: ubuntu-latest
-
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: "3.11"
+          persist-credentials: false
 
-      - name: Install build tools
-        run: pip install build
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Install locked dependencies
+        run: uv sync --frozen --extra dev --python 3.11
 
       - name: Run tests before releasing
+        run: uv run --frozen pytest tests/ -q
+
+      - name: Check tag matches package version
         run: |
-          pip install -e ".[dev]"
-          pytest tests/ -q
+          pkg_version="$(uv run --frozen python -c 'import adaptersentry; print(adaptersentry.__version__)')"
+          if [ "v${pkg_version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match package version ${pkg_version}" >&2
+            exit 1
+          fi
 
       - name: Build distributions
-        run: python -m build
+        run: uv build
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Protected environment: configure required reviewers in repository settings,
+    # and register this workflow + environment as the PyPI trusted publisher.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/adaptersentry
+    permissions:
+      id-token: write  # OIDC for PyPI trusted publishing; nothing else
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        continue-on-error: true  # requires trusted publisher configured on pypi.org
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+  github-release:
+    name: Create GitHub Release
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: dist/*
