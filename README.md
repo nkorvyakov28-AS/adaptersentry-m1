@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-%3E%3D3.11-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![Status](https://img.shields.io/badge/status-stable-brightgreen)
-![Version](https://img.shields.io/badge/version-1.0.2-blue)
+![Version](https://img.shields.io/badge/version-1.0.3-blue)
 
 AdapterSentry is a static security scanner for LoRA adapters distributed as `.safetensors`
 files. Anyone can publish an adapter to HuggingFace Hub; a malicious adapter can inject
@@ -12,6 +12,9 @@ backdoors, suppress safety alignment, or redirect model behaviour — all withou
 base model weights. AdapterSentry inspects the adapter weight tensors directly, before the
 adapter is loaded into any model.
 
+**v1.0.3** is a security release: a file the scanner cannot fully parse is no longer
+reported as `allow`, and adapter files are validated before any tensor is allocated.
+Upgrade from any earlier version.
 **v1.0.2** promotes `BehavioralResult` / `ProbeResult` to the v1.0.0 public wire contract
 and adds `scan_to_result(adapter_path)` as a stable public API returning `ScanResult`
 directly (required by downstream sandbox runners). Also adds `ScanPhase.BEHAVIORAL`.
@@ -126,6 +129,18 @@ report = scan(Path("adapter.safetensors"), fast=True)
 ```
 
 ---
+
+## What's New in v1.0.3
+
+Security release. See [CHANGELOG.md](CHANGELOG.md) and [SECURITY.md](SECURITY.md).
+
+- **Fail-closed verdict:** failed or degraded parsing never yields `allow`.
+- **Validation before allocation:** bounded header, regular files only, dtype/shape/size/rank
+  checks from the header, per-tensor loading; skipped tensors are reported.
+- **NaN/Inf weights** mark the scan degraded instead of silently disabling detectors.
+- **Terminal-safe text output** for tensor names and paths.
+- **Supply chain:** least-privilege, SHA-pinned CI; gitleaks and pip-audit; locked
+  dependencies; `huggingface_hub` and `psutil` moved to the `[bench]` extra.
 
 ## What's New in v1.0.2
 
@@ -365,7 +380,7 @@ Benchmark methodology: [docs/benchmarks/methodology.md](docs/benchmarks/methodol
   "schema_version": "1.0.0",
   "identity": {
     "scan_id": "sha256:...",
-    "analyzer_version": "1.0.2",
+    "analyzer_version": "1.0.3",
     "schema_version": "1.0.0"
   },
   "artifact": {
@@ -399,7 +414,7 @@ Full schema reference: [docs/output-schema/scan-result.md](docs/output-schema/sc
 ```json
 {
   "schema_version": "1.0.0",
-  "tool": {"name": "adaptersentry", "version": "1.0.2"},
+  "tool": {"name": "adaptersentry", "version": "1.0.3"},
   "risk_summary": {
     "overall_risk": 0, "risk_level": "LOW",
     "ensemble_score": 4.1, "ensemble_risk_level": "LOW",

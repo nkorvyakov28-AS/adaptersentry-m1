@@ -3,6 +3,54 @@
 All notable changes to AdapterSentry are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.0.3] — 2026-09-29
+
+Security release. All users of earlier versions should upgrade: before 1.0.3 a
+file the scanner could not parse could be reported as `recommended_action: "allow"`.
+
+### Security
+
+- **Fail-closed verdict.** A failed parse was reported as LOW risk with
+  `recommended_action: "allow"` by the single-file CLI and `scan_to_result()`
+  (batch mode said `review`). An attacker only had to make the parser fail while the
+  real loader still applied the weights. Failed or degraded parsing now always yields
+  at least `review`, `m2_recommended: true` and a `PARSE_FAILED` / `DEGRADED_PARSE`
+  policy signal; one shared rule serves the CLI and the batch worker.
+- **Validation before allocation.** The documented tensor-bomb guard was not on the
+  scan path, and the safetensors header length was unbounded. Files must now be
+  regular (no FIFOs/devices, including via symlinks) and at most 64 GiB; the header is
+  bounded to 100 MB and checked against the file size; dtype (F32/F16/BF16), shape,
+  byte length, element count (1 B per tensor, 3 B total) and LoRA rank (≤ 1024) are
+  validated from the header before any tensor is allocated.
+- **Per-tensor loading.** One bad tensor no longer fails or silently disappears from
+  the scan: skipped tensors, including tensors outside `lora_A`/`lora_B` pairs, are
+  reported as `TENSOR_NOT_ANALYZED` and make the scan `DEGRADED`.
+- **NaN/Inf weights** made every detector comparison false and the adapter look
+  clean; such layers are now excluded, flagged `NON_FINITE_WEIGHTS` and degrade the scan.
+- **Terminal injection.** Control and bidi characters in tensor names, paths and
+  messages are escaped in text output and CLI errors.
+- **Rust extension.** Sorting on NaN could panic and abort a whole batch; sorts use a
+  total order and quantiles are clamped. pyo3 upgraded to 0.25 (RUSTSEC-2025-0020).
+- **Identity hashing and batch discovery** refuse non-regular files instead of
+  blocking on a FIFO.
+- **CI/CD.** Release split into build / publish (`id-token: write` only, protected
+  `pypi` environment) / GitHub release; publishing no longer uses `continue-on-error`;
+  all actions pinned by commit SHA; least-privilege permissions; gitleaks history scan
+  and pip-audit on every push; Dependabot for actions, uv and cargo.
+
+### Changed
+
+- Dependencies have upper bounds by major version and are locked in `uv.lock`;
+  numpy 2 is the minimum. `huggingface_hub` and `psutil` moved to the `[bench]` extra.
+- `adaptersentry-rs/Cargo.lock` is tracked for reproducible builds.
+- Internal planning notes are no longer tracked.
+
+### Documentation
+
+- SECURITY.md describes the checks the scan path actually performs; the claimed
+  metadata depth cap is removed (safetensors metadata is flat). Notes on
+  `--ray-address` (no authentication) and absolute paths in reports.
+
 ## [1.0.2] — 2026-05-05
 
 ### Added
