@@ -206,26 +206,24 @@ def worker_main(
         score_breakdown=score_breakdown,
     )
 
-    # Determine recommended_action from risk level
-    level_val = rs.ensemble_risk_level.value
-    if level_val in ("HIGH", "CRITICAL"):
-        action = "block"
-    elif level_val == "MEDIUM":
-        action = "review"
-    else:
-        action = "allow"
+    # Fail-closed verdict: degraded or failed parsing never yields "allow"
+    from adaptersentry.scoring.verdict import derive_verdict
 
-    # M2 recommended if HIGH/CRITICAL or missing metadata
-    m2_rec = level_val in ("HIGH", "CRITICAL") or not adapter_report.adapter_metadata.metadata_present
+    decision = derive_verdict(
+        ensemble_level=rs.ensemble_risk_level,
+        parse_status=adapter_report.parse_status,
+        analysis_mode=adapter_report.analysis_mode,
+        metadata_present=adapter_report.adapter_metadata.metadata_present,
+    )
 
     verdict = RiskVerdict(
         overall_score=rs.overall_risk,
         overall_level=rs.risk_level,
-        recommended_action=action,
-        m2_recommended=m2_rec,
+        recommended_action=decision.action,
+        m2_recommended=decision.m2_recommended,
         false_positive_suppressed=rs.false_positive_suppressed,
         training_status=rs.training_status,
-        policy_signals=[],
+        policy_signals=decision.policy_signals,
     )
 
     n_layers_analyzed = sum(
@@ -318,8 +316,17 @@ def _make_failed_result(
     from adaptersentry.schemas.errors import ScanError, ErrorCategory, ScanPhase
     from adaptersentry.schemas.finding import Severity
 
+    from adaptersentry.scoring.verdict import derive_verdict
+
     completed_at = _utcnow()
     scan_id = _sha256(req.request_id + ":" + analyzer_config_hash + ":failed")
+    # A crashed phase is a failed parse: fail closed, never "allow"
+    failed = derive_verdict(
+        ensemble_level=Severity.MEDIUM,
+        parse_status=ParseStatus.FAILED,
+        analysis_mode=AnalysisMode.FAILED,
+        metadata_present=True,
+    )
 
     dummy_identity = AdapterArtifactIdentity(
         logical_id=_sha256(req.adapter_path),
@@ -345,14 +352,15 @@ def _make_failed_result(
         adapter_metadata=AdapterMetadata.from_parsed({}),
         verdict=RiskVerdict(
             overall_score=0,
-            overall_level=Severity.LOW,
-            recommended_action="review",
-            m2_recommended=False,
+            overall_level=Severity.MEDIUM,
+            recommended_action=failed.action,
+            m2_recommended=failed.m2_recommended,
             training_status=TrainingStatus.UNKNOWN,
+            policy_signals=failed.policy_signals,
         ),
         ensemble=EnsembleSignal(
             score=0.0,
-            risk_level=Severity.LOW,
+            risk_level=Severity.MEDIUM,
         ),
         errors=[ScanError.malformed(code=error_code, message=error_msg, phase=ScanPhase.PARSE)],
         status=ScanStatus.FAILED,

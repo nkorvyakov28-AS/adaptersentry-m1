@@ -387,11 +387,12 @@ def scan(
                 message=str(exc),
                 detail=type(exc).__name__,
             )],
+            # Fail-closed: an unparseable adapter is never reported as LOW risk.
             risk_summary=RiskSummary(
                 overall_risk=0,
-                risk_level=Severity.LOW,
+                risk_level=Severity.MEDIUM,
                 ensemble_score=0.0,
-                ensemble_risk_level=Severity.LOW,
+                ensemble_risk_level=Severity.MEDIUM,
                 training_status=TrainingStatus.UNKNOWN,
                 n_layers=0,
                 n_findings=0,

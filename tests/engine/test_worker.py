@@ -142,3 +142,23 @@ class TestWorkerDistributionFeatures:
                 assert math.isfinite(df.delta_skewness)
                 assert math.isfinite(df.delta_mean)
                 assert math.isfinite(df.delta_std)
+
+
+class TestWorkerFailClosed:
+    """Batch path must agree with the single-file CLI: never 'allow' on failed parsing."""
+
+    def test_truncated_adapter_is_review(self, tmp_path: Path) -> None:
+        good = _make_adapter(tmp_path)
+        bad = tmp_path / "truncated.safetensors"
+        bad.write_bytes(good.read_bytes()[:-32])
+        result, _ = worker_main(_make_req(bad), _CONFIG_HASH)
+        assert result.verdict.recommended_action != "allow"
+        assert result.verdict.m2_recommended is True
+        assert "PARSE_FAILED" in {s.name for s in result.verdict.policy_signals}
+
+    def test_crashed_phase_result_is_not_low(self, tmp_path: Path) -> None:
+        missing = tmp_path / "missing.safetensors"
+        result, _ = worker_main(_make_req(missing), _CONFIG_HASH)
+        assert result.status == ScanStatus.FAILED
+        assert result.verdict.recommended_action == "review"
+        assert result.verdict.overall_level.value != "LOW"

@@ -122,6 +122,7 @@ def _build_scan_result(adapter_path: Path, report: Any, claimed_rank: int | None
     from adaptersentry.engine.schemas.scoring import EnsembleSignal, RiskVerdict
     from adaptersentry.schemas.adapter_report import AnalysisMode, ParseStatus, TrainingStatus
     from adaptersentry.schemas.finding import Severity
+    from adaptersentry.scoring.verdict import derive_verdict
     from adaptersentry.version import __version__
 
     source = ArtifactSource(kind="local_path", local_path=str(adapter_path.resolve()))
@@ -159,18 +160,21 @@ def _build_scan_result(adapter_path: Path, report: Any, claimed_rank: int | None
     )
 
     rs = report.risk_summary
-    level_val = rs.ensemble_risk_level.value
-    action = "block" if level_val in ("HIGH", "CRITICAL") else "review" if level_val == "MEDIUM" else "allow"
-    m2_rec = level_val in ("HIGH", "CRITICAL") or not report.adapter_metadata.metadata_present
+    decision = derive_verdict(
+        ensemble_level=rs.ensemble_risk_level,
+        parse_status=report.parse_status,
+        analysis_mode=report.analysis_mode,
+        metadata_present=report.adapter_metadata.metadata_present,
+    )
 
     verdict = RiskVerdict(
         overall_score=rs.overall_risk,
         overall_level=rs.risk_level,
-        recommended_action=action,
-        m2_recommended=m2_rec,
+        recommended_action=decision.action,
+        m2_recommended=decision.m2_recommended,
         false_positive_suppressed=rs.false_positive_suppressed,
         training_status=rs.training_status,
-        policy_signals=[],
+        policy_signals=decision.policy_signals,
     )
     ensemble = EnsembleSignal(score=rs.ensemble_score, risk_level=rs.ensemble_risk_level)
 
