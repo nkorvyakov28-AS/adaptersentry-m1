@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "adaptersentry"
-version = "1.0.3"
+version = "2.0.0"
 description = "Static security scanner for LoRA adapters — detects anomalous weight patterns in .safetensors files"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -19,6 +19,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Security",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Typing :: Typed",
@@ -41,7 +42,6 @@ Changelog = "https://github.com/nkorvyakov28-AS/adaptersentry-m1/blob/main/CHANG
 
 [project.scripts]
 adaptersentry       = "adaptersentry.cli.main:main"
-adaptersentry-m1    = "adaptersentry.analyzer:main"
 adaptersentry-bench = "benchmarks.hub_scanner:main"
 
 [project.optional-dependencies]
