@@ -126,14 +126,14 @@ class _RssTracker:
 # ---------------------------------------------------------------------------
 
 def _collect_latencies(results_dir: Path) -> list[float]:
-    """Read wall_time_ms from every ScanResult JSON in results_dir."""
+    """Read ``scan.wall_time_ms`` from every ScanResult 2.0 JSON in results_dir."""
     latencies: list[float] = []
     for path in results_dir.glob("*.json"):
         if path.name.endswith(".debug.json") or path.name == "run_summary.json":
             continue
         try:
             data = json.loads(path.read_text())
-            ms = data.get("identity", {}).get("wall_time_ms")
+            ms = (data.get("scan") or {}).get("wall_time_ms")
             if ms is not None:
                 latencies.append(float(ms))
         except Exception:
@@ -203,6 +203,7 @@ def _run_scenario(
     cache_dir: Path | None,
     scan_mode: str = "full",
     backend: str = "mp",
+    policy: str = "default",
 ) -> BenchmarkMetrics:
     """Run one benchmark scenario and return metrics.
 
@@ -213,10 +214,12 @@ def _run_scenario(
         work_dir:     Temp dir for manifest + results.
         cache_dir:    Cache root. None = no cache. For warm, same dir used twice.
         scan_mode:    "full" (default) or "fast".
+        backend:      "mp" (multiprocessing, default) or "ray".
+        policy:       Verdict policy, "default" or "strict".
     """
-    from adaptersentry.engine.config import AnalyzerConfig
     from adaptersentry.engine.manifest import ManifestDB
     from adaptersentry.engine.orchestrator import build_manifest, run_batch
+    from adaptersentry.scanner import config_hash as scanner_config_hash
 
     run_id = f"bench-{scenario}-{uuid.uuid4().hex[:8]}"
     manifest_path = work_dir / f"manifest_{run_id}.db"
@@ -224,12 +227,9 @@ def _run_scenario(
     results_dir.mkdir(parents=True, exist_ok=True)
     jsonl_path = work_dir / f"audit_{run_id}.jsonl"
 
-    config = AnalyzerConfig()
-    config_hash = config.config_hash()
+    config_hash = scanner_config_hash(scan_mode, policy)
 
     # Warm scenario: first pass primes the cache, second pass measures hit rate.
-    # We re-use the same manifest file to avoid re-queuing completed jobs,
-    # so force_rescan=True on the second pass.
     passes = 2 if scenario == "warm" else 1
 
     stats: dict[str, int] = {}
@@ -237,7 +237,9 @@ def _run_scenario(
     peak_rss_mb = 0.0
 
     for pass_idx in range(passes):
-        force = pass_idx > 0  # second pass forces rescan to bypass terminal state
+        # Each pass is its own run in the manifest, so the warm pass is queued again
+        # without force_rescan (which would bypass the cache it is meant to measure).
+        pass_run_id = run_id if pass_idx == 0 else f"{run_id}-pass{pass_idx + 1}"
 
         # Clear results_dir between passes to keep latency from pass 2 only
         if pass_idx > 0:
@@ -247,10 +249,11 @@ def _run_scenario(
         manifest_db = ManifestDB.open(manifest_path)
         requests = build_manifest(
             corpus_paths,
-            run_id,
+            pass_run_id,
             manifest_db,
-            force_rescan=force,
+            force_rescan=False,
             scan_mode=scan_mode,
+            policy=policy,
         )
 
         if not requests:
@@ -269,33 +272,38 @@ def _run_scenario(
         )
         mile_thread.start()
 
+        # The orchestrator writes results into the cache store; workers read from
+        # cache_root. Without a store the warm pass could never hit the cache.
+        from adaptersentry.engine.cache import CacheStore
+        cache_store = CacheStore.open(cache_dir) if cache_dir is not None else None
+
         if backend == "ray":
             from adaptersentry.engine.orchestrator_ray import run_batch_ray
             stats = run_batch_ray(
                 requests=requests,
                 manifest_db=manifest_db,
-                cache_store=None,
+                cache_store=cache_store,
                 results_dir=results_dir,
                 run_jsonl_path=jsonl_path,
                 analyzer_config_hash=config_hash,
                 cache_root=cache_dir,
                 n_workers=n_workers,
-                write_debug=False,
             )
         else:
             stats = run_batch(
                 requests=requests,
                 manifest_db=manifest_db,
-                cache_store=None,
+                cache_store=cache_store,
                 results_dir=results_dir,
                 run_jsonl_path=jsonl_path,
                 analyzer_config_hash=config_hash,
                 cache_root=cache_dir,
                 n_workers=n_workers,
-                write_debug=False,
             )
 
         elapsed = time.monotonic() - t0
+        if cache_store is not None:
+            cache_store.close()
         stop_evt.set()
         mile_thread.join(timeout=2.0)
         rss = tracker.stop()

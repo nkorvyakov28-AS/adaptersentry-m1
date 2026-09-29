@@ -14,7 +14,7 @@ from adaptersentry.detectors.intra_adapter import (
     detrend,
     robust_z,
 )
-from adaptersentry.features.spectral_v2 import module_features
+from adaptersentry.features.spectral import module_features
 from adaptersentry.schemas.result import ModuleFeatures
 
 
@@ -112,7 +112,7 @@ class TestComparison:
         assert compare_within_adapter(_adapter_entries(n_layers=MIN_FAMILY - 1)) is None
 
     def test_zero_updates_are_skipped_not_flagged(self) -> None:
-        entries = _adapter_entries(n_layers=10)
+        entries = _adapter_entries(n_layers=20)
         empty = [
             ModuleEntry(index=100 + i, module="v_proj", kind="attention", layer=i, expert=None,
                         features=ModuleFeatures(), energy=0.0)

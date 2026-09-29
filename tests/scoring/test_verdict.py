@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from adaptersentry.schemas.finding import Severity
+from adaptersentry.schemas.severity import Severity
 from adaptersentry.schemas.result import DepthSpike, IntraAnomaly, ReferenceComparison
-from adaptersentry.scoring.verdict_v2 import derive_verdict
+from adaptersentry.scoring.verdict import derive_verdict
 
 
 def _ref(p: float) -> ReferenceComparison:

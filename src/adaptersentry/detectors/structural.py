@@ -29,7 +29,7 @@ from pathlib import Path
 
 from adaptersentry.parsers.adapter_config import AdapterConfig
 from adaptersentry.parsers.adapter_file import AdapterInventory
-from adaptersentry.schemas.finding import Severity
+from adaptersentry.schemas.severity import Severity
 from adaptersentry.schemas.result import Finding, Location, SiblingFile
 
 _CODE_EXT = frozenset({".py", ".pyc", ".sh", ".js", ".so", ".dll", ".dylib", ".exe"})

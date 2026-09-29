@@ -1,14 +1,15 @@
-"""AdapterSentry — static security scanner for LoRA adapters.
+"""AdapterSentry M1 — static security scanner for LoRA adapters.
 
 Quick start
 -----------
->>> from adaptersentry import analyze, scan
->>> report_dict = analyze(Path("adapter.safetensors"))   # legacy dict API
->>> report = scan(Path("adapter.safetensors"))           # typed AdapterReport API
->>> print(report.risk_summary.ensemble_risk_level)
+>>> from pathlib import Path
+>>> from adaptersentry import scan
+>>> result = scan(Path("adapter_model.safetensors"))
+>>> result.verdict.action          # "allow" | "review" | "block"
 """
 
+from adaptersentry.scanner import scan
+from adaptersentry.schemas.result import ScanResult, load_scan_result
 from adaptersentry.version import __version__
-from adaptersentry.analyzer import analyze, load_adapter, scan, scan_to_result
 
-__all__ = ["analyze", "load_adapter", "scan", "scan_to_result", "__version__"]
+__all__ = ["ScanResult", "__version__", "load_scan_result", "scan"]

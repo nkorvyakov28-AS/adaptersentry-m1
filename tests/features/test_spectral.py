@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from scipy.stats import kurtosis
 
-from adaptersentry.features.spectral_v2 import (
+from adaptersentry.features.spectral import (
     gini,
     head_features,
     hoyer,

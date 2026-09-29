@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
@@ -10,49 +9,8 @@ import pytest
 from safetensors.numpy import save_file
 
 from adaptersentry.scanner import scan
+from tests.adapter_factory import write_adapter as _write_adapter
 from adaptersentry.schemas.result import load_scan_result
-
-_MODULES = (("self_attn.q_proj", 256, 256), ("self_attn.v_proj", 128, 256), ("mlp.down_proj", 256, 512))
-
-
-def _write_adapter(
-    directory: Path,
-    *,
-    n_layers: int = 12,
-    r: int = 8,
-    inject_layer: int | None = None,
-    config: dict | None = None,
-    extra: dict[str, np.ndarray] | None = None,
-    b_scale: float = 0.01,
-    seed: int = 0,
-    name: str = "adapter_model.safetensors",
-) -> Path:
-    rng = np.random.default_rng(seed)
-    tensors: dict[str, np.ndarray] = {}
-    for layer in range(n_layers):
-        for mod, out, inp in _MODULES:
-            base = f"base_model.model.model.layers.{layer}.{mod}"
-            a = rng.standard_normal((r, inp)).astype(np.float32)
-            b = (rng.standard_normal((out, r)) * b_scale * np.exp(-np.arange(r) / 3)).astype(np.float32)
-            if inject_layer == layer and mod == "mlp.down_proj":
-                spike = np.zeros(out, np.float32)
-                spike[rng.choice(out, 4, replace=False)] = 0.3
-                b[:, -1] = spike
-            tensors[f"{base}.lora_A.weight"] = a
-            tensors[f"{base}.lora_B.weight"] = b
-    tensors.update(extra or {})
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / name
-    save_file(tensors, str(path), metadata={"format": "pt"})
-    cfg = {"peft_type": "LORA", "r": r, "lora_alpha": 2 * r,
-           "base_model_name_or_path": "meta-llama/Llama-3.2-1B",
-           "target_modules": ["q_proj", "v_proj", "down_proj"]}
-    if config is not None:
-        cfg = config
-    if cfg:
-        (directory / "adapter_config.json").write_text(json.dumps(cfg))
-    return path
-
 
 class TestCleanAdapter:
     def test_clean_adapter_allows_with_medium_confidence(self, tmp_path: Path) -> None:
@@ -69,13 +27,13 @@ class TestCleanAdapter:
         assert a.format == "peft_lora" and a.base_family == "llama" and a.base_family_source == "config"
         assert a.rank_declared == 8 and a.rank_actual.distinct == [8]
         assert a.lora_alpha == 16 and a.scaling == "alpha_over_r"
-        assert a.n_model_layers == 12 and a.training_state == "trained"
+        assert a.n_model_layers == 16 and a.training_state == "trained"
         assert set(a.target_modules_actual) == {"q_proj", "v_proj", "down_proj"}
 
     def test_coverage_complete(self, tmp_path: Path) -> None:
         c = scan(_write_adapter(tmp_path / "cov")).coverage
-        assert (c.n_modules, c.n_modules_analyzed, c.n_not_analyzed) == (36, 36, 0)
-        assert c.n_tensors_analyzed == c.n_tensors_total == 72
+        assert (c.n_modules, c.n_modules_analyzed, c.n_not_analyzed) == (48, 48, 0)
+        assert c.n_tensors_analyzed == c.n_tensors_total == 96
 
     def test_file_name_only_by_default(self, tmp_path: Path) -> None:
         path = _write_adapter(tmp_path / "paths")
@@ -90,7 +48,7 @@ class TestCleanAdapter:
         path = _write_adapter(tmp_path / "mods")
         assert scan(path).modules is None
         mods = scan(path, include_modules=True).modules
-        assert mods is not None and len(mods) == 36 and mods[0].heads is None
+        assert mods is not None and len(mods) == 48 and mods[0].heads is None
         assert all(m.status == "ok" and m.features is not None for m in mods)
         with_heads = scan(path, include_heads=True).modules
         assert any(m.heads for m in with_heads if m.kind == "attention")
@@ -201,3 +159,26 @@ class TestFailures:
         path = _write_adapter(tmp_path / "det")
         assert scan(path).scan.scan_id == scan(path).scan.scan_id
         assert scan(path).scan.scan_id != scan(path, policy="strict").scan.scan_id
+
+
+class TestFileChangedDuringScan:
+    def test_swap_between_hash_and_analysis_fails_closed(self, tmp_path: Path, monkeypatch) -> None:
+        import adaptersentry.scanner as scanner_mod
+
+        path = _write_adapter(tmp_path / "swap")
+        real_iter = scanner_mod.iter_pairs
+
+        def swapping_iter(inv):
+            # A swap happens after the initial snapshot, during the scan. Timestamps on
+            # some filesystems (tmpfs) tick every few ms, so leave a tick before writing.
+            import time
+            time.sleep(0.05)
+            data = bytearray(path.read_bytes())
+            data[-1] ^= 0xFF  # different content, same size and inode
+            path.write_bytes(bytes(data))
+            yield from real_iter(inv)
+
+        monkeypatch.setattr(scanner_mod, "iter_pairs", swapping_iter)
+        result = scan(path)
+        assert result.status == "failed" and result.verdict.action == "review"
+        assert "changed during the scan" in result.errors[0].message

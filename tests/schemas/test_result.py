@@ -60,7 +60,7 @@ class TestRoundTrip:
 
 class TestVersionGate:
     def test_v1_document_is_rejected_with_clear_error(self) -> None:
-        v1 = json.loads((_FIXTURES / "scan_result_v1.0.0.json").read_text())
+        v1 = {"schema_version": "1.0.0", "identity": {}, "verdict": {"recommended_action": "allow"}}
         with pytest.raises(UnsupportedSchemaVersion, match="Re-scan"):
             load_scan_result(v1)
 

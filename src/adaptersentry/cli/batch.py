@@ -5,14 +5,13 @@ incremental caching, and full resumability after crashes.
 
 Exit codes:
   0  — batch completed; all jobs in terminal state
-  1  — batch failed or was interrupted
-  2  — any job produced findings at or above --fail-on threshold
+  1  — some adapters could not be analysed (status "failed"), or the batch was interrupted
+  2  — some adapter's verdict action reached the --fail-on threshold
 
 Output:
-  results/<run_id>/                    — per-adapter JSON files (summary-json)
+  results/<run_id>/                    — per-adapter ScanResult 2.0.0 JSON files
   results/<run_id>/run.jsonl           — append-only audit log (all results)
-  results/<run_id>/run_summary.json    — batch stats and top findings
-  [results/<run_id>/*.debug.json]      — debug-json per adapter (if --debug)
+  results/<run_id>/run_summary.json    — batch stats and verdict counts
 
 Cache:
   ~/.adaptersentry/cache/              — content-addressed result cache
@@ -34,7 +33,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_SEVERITIES = ("LOW", "MEDIUM", "HIGH", "CRITICAL")
+_ACTION_RANK = {"allow": 0, "review": 1, "block": 2}
 
 
 def build_parser(subparsers: Any) -> None:
@@ -88,7 +87,7 @@ def build_parser(subparsers: Any) -> None:
         metavar="DIR",
         help=(
             "Cache store root (default: ~/.adaptersentry/cache). "
-            "Set to /dev/null to disable caching."
+            "Use --no-cache to disable caching."
         ),
     )
     p.add_argument(
@@ -107,23 +106,17 @@ def build_parser(subparsers: Any) -> None:
         help="Re-scan all adapters, ignoring existing terminal manifest state",
     )
     p.add_argument(
-        "--debug",
-        action="store_true",
-        help="Write .debug.json files with per-layer statistics alongside summary JSON",
-    )
-    p.add_argument(
         "--fail-on",
-        choices=_SEVERITIES,
+        choices=("review", "block"),
         default=None,
-        metavar="SEVERITY",
-        help="Exit with code 2 if any finding meets or exceeds SEVERITY",
+        dest="fail_on",
+        help="Exit with code 2 if any adapter's verdict action is at least this",
     )
     p.add_argument(
-        "--rank",
-        type=int,
-        default=None,
-        metavar="R",
-        help="Declared LoRA rank r (applied to all adapters in the batch)",
+        "--policy",
+        choices=("default", "strict"),
+        default="default",
+        help="default: never block without a reference profile; strict: block on structural red flags",
     )
     p.add_argument(
         "--mode",
@@ -131,9 +124,8 @@ def build_parser(subparsers: Any) -> None:
         default="full",
         dest="scan_mode",
         help=(
-            "Scan depth: full (default) — all detectors at full depth; "
-            "fast — truncated SVD, sampling, no IsolationForest on large tensors. "
-            "Use fast for high-throughput corpus screening."
+            "full (default) or fast: fast uses 64 instead of 256 rows for the kurtosis "
+            "estimate; every other feature is exact in both modes."
         ),
     )
     p.add_argument(
@@ -160,13 +152,12 @@ def build_parser(subparsers: Any) -> None:
 
 def run(args: Any) -> int:
     """Execute the batch subcommand."""
-    from adaptersentry.engine.config import AnalyzerConfig, ScanMode
     from adaptersentry.engine.manifest import ManifestDB
     from adaptersentry.engine.cache import CacheStore
     from adaptersentry.engine.orchestrator import (
         build_manifest, run_batch, resume_after_failure,
     )
-    from adaptersentry.schemas.finding import Severity
+    from adaptersentry.scanner import config_hash as scan_config_hash
 
     backend = getattr(args, "backend", "mp")
 
@@ -196,10 +187,9 @@ def run(args: Any) -> int:
     run_jsonl = run_dir / "run.jsonl"
 
     # ── Analyzer config hash ──────────────────────────────────────────────────
-    scan_mode = ScanMode(getattr(args, "scan_mode", "full"))
-    config = AnalyzerConfig(scan_mode=scan_mode)
-    config_hash = config.config_hash()
-    logger.info("Analyzer config hash: %s  scan_mode=%s", config_hash, scan_mode.value)
+    scan_mode = getattr(args, "scan_mode", "full")
+    config_hash = scan_config_hash(scan_mode, args.policy)
+    logger.info("Config hash: %s  mode=%s policy=%s", config_hash, scan_mode, args.policy)
 
     # ── Manifest ──────────────────────────────────────────────────────────────
     manifest_path = Path.home() / ".adaptersentry" / "manifest.sqlite"
@@ -217,7 +207,8 @@ def run(args: Any) -> int:
             run_id=run_id,
             manifest_db=manifest_db,
             force_rescan=args.force_rescan,
-            scan_mode=scan_mode.value,
+            scan_mode=scan_mode,
+            policy=args.policy,
         )
 
         if not requests:
@@ -255,7 +246,6 @@ def run(args: Any) -> int:
                     analyzer_config_hash=config_hash,
                     cache_root=cache_root,
                     n_workers=args.workers,
-                    write_debug=args.debug,
                     ray_address=getattr(args, "ray_address", None),
                 )
             else:
@@ -268,7 +258,6 @@ def run(args: Any) -> int:
                     analyzer_config_hash=config_hash,
                     cache_root=cache_root,
                     n_workers=args.workers,
-                    write_debug=args.debug,
                 )
         finally:
             if cache_store is not None:
@@ -284,14 +273,15 @@ def run(args: Any) -> int:
     print(f"Results written to: {run_dir}")
     print(f"Audit log:          {run_jsonl}")
 
-    _write_run_summary(run_dir, run_id, stats)
+    actions = _count_actions(run_jsonl)
+    print(f"  verdicts: allow={actions['allow']}  review={actions['review']}  block={actions['block']}")
+    _write_run_summary(run_dir, run_id, stats, actions)
 
     # ── fail-on threshold ─────────────────────────────────────────────────────
-    if args.fail_on and run_jsonl.exists():
-        threshold = _SEVERITIES.index(args.fail_on)
-        triggered = _check_fail_on(run_jsonl, threshold)
-        if triggered:
-            print(f"\nFINDINGS at or above {args.fail_on} detected. Exiting with code 2.")
+    if args.fail_on:
+        threshold = _ACTION_RANK[args.fail_on]
+        if any(n and _ACTION_RANK[a] >= threshold for a, n in actions.items()):
+            print(f"\nVerdicts at or above '{args.fail_on}' present. Exiting with code 2.")
             return 2
 
     if stats.get("failed", 0) > 0:
@@ -319,35 +309,30 @@ def _collect_paths(args: Any) -> list[Path]:
     return paths
 
 
-def _write_run_summary(run_dir: Path, run_id: str, stats: dict) -> None:
-    from datetime import datetime, timezone
+def _write_run_summary(run_dir: Path, run_id: str, stats: dict, actions: dict[str, int]) -> None:
     summary = {
         "run_id": run_id,
         "completed_at": datetime.now(timezone.utc).isoformat(),
         "stats": stats,
+        "verdicts": actions,
     }
-    (run_dir / "run_summary.json").write_text(
-        json.dumps(summary, indent=2), encoding="utf-8"
-    )
+    (run_dir / "run_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
 
-_SEV_ORDER = {s: i for i, s in enumerate(_SEVERITIES)}
-
-
-def _check_fail_on(run_jsonl: Path, threshold_idx: int) -> bool:
-    """Return True if any result in the JSONL has a finding at or above threshold."""
+def _count_actions(run_jsonl: Path) -> dict[str, int]:
+    """Count verdict actions over all results in the run's JSONL log."""
+    counts = {"allow": 0, "review": 0, "block": 0}
     try:
-        for line in run_jsonl.read_text().splitlines():
-            if not line.strip():
-                continue
-            try:
-                obj = json.loads(line)
-                for finding in obj.get("findings", []):
-                    sev = finding.get("severity", "LOW")
-                    if _SEV_ORDER.get(sev, 0) >= threshold_idx:
-                        return True
-            except json.JSONDecodeError:
-                continue
+        lines = run_jsonl.read_text(encoding="utf-8").splitlines()
     except OSError:
-        pass
-    return False
+        return counts
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            action = json.loads(line).get("verdict", {}).get("action")
+        except (json.JSONDecodeError, AttributeError):
+            continue
+        if action in counts:
+            counts[action] += 1
+    return counts

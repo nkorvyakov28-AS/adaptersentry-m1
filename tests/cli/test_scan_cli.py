@@ -1,4 +1,4 @@
-"""CLI smoke tests for `adaptersentry scan`."""
+"""CLI tests for `adaptersentry scan` (ScanResult 2.0.0 output, exit codes, flags)."""
 
 from __future__ import annotations
 
@@ -8,122 +8,93 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import pytest
-from safetensors.numpy import save_file
 
-
-def _make_adapter(tmp_path: Path, high_risk: bool = False) -> Path:
-    rng = np.random.default_rng(12)
-    path = tmp_path / "adapter.safetensors"
-    if high_risk:
-        a = np.zeros((8, 64), dtype=np.float32)
-        a[0, 0] = 5000.0
-        b = rng.standard_normal((64, 8)).astype(np.float32)
-    else:
-        a = rng.standard_normal((8, 64)).astype(np.float32)
-        b = rng.standard_normal((64, 8)).astype(np.float32)
-    save_file(
-        {
-            "model.layers.0.q_proj.lora_A.weight": a,
-            "model.layers.0.q_proj.lora_B.weight": b,
-        },
-        str(path),
-        metadata={"r": "8"},
-    )
-    return path
+from adaptersentry.schemas.result import load_scan_result
+from tests.adapter_factory import write_adapter
 
 
 def _run(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [sys.executable, "-m", "adaptersentry"] + list(args),
-        capture_output=True,
-        text=True,
-    )
+    return subprocess.run([sys.executable, "-m", "adaptersentry", *args], capture_output=True, text=True)
 
 
-class TestVersionFlag:
+class TestVersion:
     def test_version_flag(self) -> None:
-        result = _run("--version")
-        assert result.returncode == 0
-        assert "adaptersentry" in result.stdout
         from adaptersentry.version import __version__
-        assert __version__ in result.stdout
+        out = _run("--version")
+        assert out.returncode == 0 and __version__ in out.stdout
 
 
-class TestScanTextFormat:
-    def test_scan_clean_adapter_exit_zero(self, tmp_path: Path) -> None:
-        adapter = _make_adapter(tmp_path)
-        result = _run("scan", str(adapter))
-        assert result.returncode == 0
+class TestFormats:
+    def test_text_default(self, tmp_path: Path) -> None:
+        out = _run("scan", str(write_adapter(tmp_path / "a")))
+        assert out.returncode == 0
+        assert "Verdict:" in out.stdout and "ALLOW" in out.stdout
+        assert "\x1b[" not in out.stdout  # not a tty → no colours
 
-    def test_scan_text_output_contains_risk(self, tmp_path: Path) -> None:
-        adapter = _make_adapter(tmp_path)
-        result = _run("scan", str(adapter))
-        assert "Risk" in result.stdout or "LOW" in result.stdout
+    def test_json_is_scan_result_2(self, tmp_path: Path) -> None:
+        out = _run("scan", str(write_adapter(tmp_path / "a")), "--format", "json")
+        result = load_scan_result(out.stdout)
+        assert result.schema_version == "2.0.0" and result.modules is None
+        assert result.artifact.provenance.path == "adapter_model.safetensors"
 
-    def test_scan_missing_file_exit_one(self, tmp_path: Path) -> None:
-        result = _run("scan", str(tmp_path / "ghost.safetensors"))
-        assert result.returncode == 1
-        # New renderer shows "ANALYSIS FAILED" and "parse:failed" instead of raw "error"
-        combined = (result.stderr + result.stdout).lower()
-        assert "failed" in combined or "error" in combined
+    def test_full_json_includes_modules(self, tmp_path: Path) -> None:
+        out = _run("scan", str(write_adapter(tmp_path / "a")), "--format", "full-json")
+        assert load_scan_result(out.stdout).modules
 
-    def test_scan_no_color_flag(self, tmp_path: Path) -> None:
-        adapter = _make_adapter(tmp_path)
-        result = _run("scan", str(adapter), "--no-color")
-        assert result.returncode == 0
-        assert "\033[" not in result.stdout
+    def test_full_paths_flag(self, tmp_path: Path) -> None:
+        path = write_adapter(tmp_path / "a")
+        out = _run("scan", str(path), "--format", "json", "--full-paths")
+        assert load_scan_result(out.stdout).artifact.provenance.path == str(path.resolve())
 
+    def test_sarif(self, tmp_path: Path) -> None:
+        out = _run("scan", str(write_adapter(tmp_path / "a", inject_layer=5)), "--format", "sarif")
+        doc = json.loads(out.stdout)
+        assert doc["version"] == "2.1.0"
+        run = doc["runs"][0]
+        assert run["properties"]["action"] == "review"
+        assert any(r["ruleId"] == "ADAPTER_VERDICT" for r in run["results"])
 
-class TestScanJsonFormat:
-    def test_scan_json_format_valid(self, tmp_path: Path) -> None:
-        adapter = _make_adapter(tmp_path)
-        result = _run("scan", str(adapter), "--format", "json")
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
-        assert data["schema_version"] == "1.0.0"
+    def test_output_file(self, tmp_path: Path) -> None:
+        report = tmp_path / "report.json"
+        out = _run("scan", str(write_adapter(tmp_path / "a")), "--format", "json", "--output", str(report))
+        assert out.returncode == 0 and out.stdout == ""
+        assert load_scan_result(report.read_text()).status == "ok"
 
-    def test_scan_json_write_to_file(self, tmp_path: Path) -> None:
-        adapter = _make_adapter(tmp_path)
-        out = tmp_path / "report.json"
-        result = _run("scan", str(adapter), "--format", "json", "--output", str(out))
-        assert result.returncode == 0
-        assert out.exists()
-        data = json.loads(out.read_text())
-        assert "schema_version" in data
+    def test_unknown_format_rejected(self, tmp_path: Path) -> None:
+        assert _run("scan", "x.safetensors", "--format", "debug-json").returncode != 0
 
 
-class TestScanSarifFormat:
-    def test_scan_sarif_format_valid(self, tmp_path: Path) -> None:
-        adapter = _make_adapter(tmp_path)
-        result = _run("scan", str(adapter), "--format", "sarif")
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
-        assert data["version"] == "2.1.0"
-        assert "runs" in data
+class TestExitCodes:
+    def test_failed_scan_exits_one_but_reports_review(self, tmp_path: Path) -> None:
+        out = _run("scan", str(tmp_path / "missing.safetensors"), "--format", "json")
+        assert out.returncode == 1
+        assert load_scan_result(out.stdout).verdict.action == "review"
 
-    def test_scan_sarif_write_to_file(self, tmp_path: Path) -> None:
-        adapter = _make_adapter(tmp_path)
-        out = tmp_path / "results.sarif"
-        result = _run("scan", str(adapter), "--format", "sarif", "--output", str(out))
-        assert result.returncode == 0
-        assert out.exists()
-        data = json.loads(out.read_text())
-        assert data["version"] == "2.1.0"
+    def test_fail_on_review_triggers(self, tmp_path: Path) -> None:
+        path = write_adapter(tmp_path / "a", inject_layer=5)
+        assert _run("scan", str(path), "--fail-on", "review").returncode == 2
+        assert _run("scan", str(path), "--fail-on", "block").returncode == 0
+
+    def test_fail_on_clean_adapter(self, tmp_path: Path) -> None:
+        assert _run("scan", str(write_adapter(tmp_path / "a")), "--fail-on", "review").returncode == 0
+
+    def test_strict_policy_blocks_structural_red_flag(self, tmp_path: Path) -> None:
+        path = write_adapter(tmp_path / "a", extra={"base_model.model.lm_head.weight": np.zeros((8, 256), np.float32)})
+        assert _run("scan", str(path), "--fail-on", "block").returncode == 0
+        assert _run("scan", str(path), "--fail-on", "block", "--policy", "strict").returncode == 2
 
 
-class TestFailOnFlag:
-    def test_fail_on_critical_no_trigger_on_clean(self, tmp_path: Path) -> None:
-        adapter = _make_adapter(tmp_path)
-        result = _run("scan", str(adapter), "--fail-on", "CRITICAL")
-        # Clean adapter should not trigger CRITICAL
-        assert result.returncode in (0, 2)  # 0 = no findings at threshold
-
-    def test_module_invocation(self, tmp_path: Path) -> None:
-        """python -m adaptersentry should work identically."""
-        adapter = _make_adapter(tmp_path)
-        result = subprocess.run(
-            [sys.executable, "-m", "adaptersentry", "scan", str(adapter)],
-            capture_output=True, text=True,
+class TestBatch:
+    def test_batch_counts_verdicts_and_fail_on(self, tmp_path: Path) -> None:
+        corpus = tmp_path / "corpus"
+        write_adapter(corpus / "clean", seed=1, n_layers=6)
+        write_adapter(corpus / "inj", seed=2, inject_layer=4)
+        out = subprocess.run(
+            [sys.executable, "-m", "adaptersentry", "batch", "--input-dir", str(corpus),
+             "--output-dir", str(tmp_path / "results"), "--no-cache", "--workers", "1",
+             "--run-id", "t1", "--fail-on", "review"],
+            capture_output=True, text=True, env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
         )
-        assert result.returncode == 0
+        assert out.returncode == 2, out.stderr
+        summary = json.loads((tmp_path / "results" / "t1" / "run_summary.json").read_text())
+        assert summary["verdicts"] == {"allow": 1, "review": 1, "block": 0}

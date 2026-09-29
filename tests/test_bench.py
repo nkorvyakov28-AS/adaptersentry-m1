@@ -12,12 +12,12 @@ from benchmarks.hub_scanner import (
     CandidateRepo,
     ScanResult,
     append_result,
-    check_lora_architecture,
     load_all_results,
     load_completed_repo_ids,
+    read_tensor_keys_sample,
     scan_one_adapter,
 )
-from benchmarks.report import _percentiles, write_aggregate, write_csv
+from benchmarks.report import _percentiles, write_aggregate, write_csv, write_markdown_report
 
 
 # ---------------------------------------------------------------------------
@@ -29,17 +29,29 @@ def _ts() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _success(repo_id: str, ens: float, risk: str, ts: str = "TRAINED") -> ScanResult:
+def _success(
+    repo_id: str,
+    z: float | None,
+    action: str = "allow",
+    level: str = "LOW",
+    ts: str = "trained",
+    reasons: list[str] | None = None,
+) -> ScanResult:
     return ScanResult(
         repo_id=repo_id,
         scan_timestamp=_ts(),
         status="success",
-        ensemble_score=ens,
-        ensemble_risk_level=risk,
-        overall_risk={"LOW": 0, "MEDIUM": 10, "HIGH": 50, "CRITICAL": 100}.get(risk, 0),
-        training_status=ts,
-        n_flags=0,
-        top_flags=[],
+        scan_status="ok",
+        action=action,
+        level=level,
+        training_state=ts,
+        max_robust_z=z,
+        n_outlier_modules=0 if z is None or z < 3.5 else 1,
+        reason_codes=list(reasons or ["NO_REFERENCE_PROFILE"]),
+        n_findings=0,
+        top_findings=[],
+        rank_declared=8,
+        n_modules=4,
         hf_tags=["peft"],
     )
 
@@ -89,7 +101,7 @@ class TestCandidateRepo:
 
 class TestScanResult:
     def test_to_dict_from_dict_round_trip(self) -> None:
-        r = _success("a/b", 14.6, "HIGH")
+        r = _success("a/b", 14.6, "review", "MEDIUM", reasons=["INTRA_OUTLIER", "RANK_MISMATCH"])
         assert ScanResult.from_dict(r.to_dict()) == r
 
     def test_failed_result_round_trip(self) -> None:
@@ -120,12 +132,12 @@ class TestResumeBehavior:
 
     def test_appended_result_appears_in_completed(self, tmp_path: Path) -> None:
         p = tmp_path / "results.jsonl"
-        append_result(_success("author/model-a", 4.1, "LOW"), p)
+        append_result(_success("author/model-a", 4.1), p)
         assert "author/model-a" in load_completed_repo_ids(p)
 
     def test_all_statuses_counted_as_completed(self, tmp_path: Path) -> None:
         p = tmp_path / "results.jsonl"
-        append_result(_success("a/ok", 3.0, "LOW"), p)
+        append_result(_success("a/ok", 3.0), p)
         append_result(_failed("b/fail"), p)
         append_result(
             ScanResult(repo_id="c/skip", scan_timestamp=_ts(), status="size_exceeded"), p
@@ -136,15 +148,15 @@ class TestResumeBehavior:
     def test_multiple_results_all_loaded(self, tmp_path: Path) -> None:
         p = tmp_path / "results.jsonl"
         for i in range(5):
-            append_result(_success(f"a/model-{i}", float(i), "LOW"), p)
+            append_result(_success(f"a/model-{i}", float(i)), p)
         assert len(load_completed_repo_ids(p)) == 5
 
     def test_corrupted_line_skipped_gracefully(self, tmp_path: Path) -> None:
         p = tmp_path / "results.jsonl"
-        append_result(_success("a/good-1", 4.0, "LOW"), p)
+        append_result(_success("a/good-1", 4.0), p)
         with p.open("a") as f:
             f.write("NOT VALID JSON\n")
-        append_result(_success("a/good-2", 5.0, "LOW"), p)
+        append_result(_success("a/good-2", 5.0), p)
 
         completed = load_completed_repo_ids(p)
         assert "a/good-1" in completed
@@ -153,31 +165,45 @@ class TestResumeBehavior:
 
     def test_blank_lines_skipped(self, tmp_path: Path) -> None:
         p = tmp_path / "results.jsonl"
-        append_result(_success("a/model", 4.0, "LOW"), p)
+        append_result(_success("a/model", 4.0), p)
         with p.open("a") as f:
             f.write("\n\n")
         assert len(load_completed_repo_ids(p)) == 1
 
     def test_load_all_results_preserves_fields(self, tmp_path: Path) -> None:
         p = tmp_path / "results.jsonl"
-        original = _success("author/model", 14.6, "HIGH", ts="TRAINED")
-        original.n_flags = 5
-        original.cross_layer_consistency = 0.0
+        original = _success("author/model", 14.6, "review", "MEDIUM", ts="partial",
+                            reasons=["INTRA_OUTLIER", "SIBLING_EXECUTABLE"])
+        original.n_findings = 5
+        original.top_findings = ["INTRA_DEPTH_SPIKE: Module departs from its family"]
         append_result(original, p)
 
         loaded = load_all_results(p)
         assert len(loaded) == 1
-        assert loaded[0].ensemble_score == pytest.approx(14.6)
-        assert loaded[0].training_status == "TRAINED"
-        assert loaded[0].n_flags == 5
-        assert loaded[0].cross_layer_consistency == pytest.approx(0.0)
+        assert loaded[0] == original
+        assert loaded[0].max_robust_z == pytest.approx(14.6)
+        assert loaded[0].training_state == "partial"
+        assert loaded[0].n_findings == 5
+        assert loaded[0].reason_codes == ["INTRA_OUTLIER", "SIBLING_EXECUTABLE"]
+
+    def test_load_all_results_ignores_legacy_fields(self, tmp_path: Path) -> None:
+        """1.x records load; their removed fields (ensemble_score, …) are dropped."""
+        p = tmp_path / "results.jsonl"
+        p.write_text(json.dumps({
+            "repo_id": "old/record", "scan_timestamp": _ts(), "status": "success",
+            "ensemble_score": 12.0, "overall_risk": 50, "top_flags": ["X"],
+        }) + "\n")
+        loaded = load_all_results(p)
+        assert len(loaded) == 1
+        assert loaded[0].repo_id == "old/record"
+        assert loaded[0].max_robust_z is None
 
     def test_resume_skips_completed(self, tmp_path: Path) -> None:
         """Simulates resume: only repos NOT in completed_ids should be processed."""
         p = tmp_path / "results.jsonl"
         already_done = {"a/done-1", "a/done-2"}
         for repo_id in already_done:
-            append_result(_success(repo_id, 3.0, "LOW"), p)
+            append_result(_success(repo_id, 3.0), p)
 
         completed = load_completed_repo_ids(p)
         candidates = [f"a/done-{i}" for i in range(1, 6)]
@@ -215,7 +241,7 @@ class TestPercentiles:
 
 class TestWriteCsv:
     def test_creates_file_with_header(self, tmp_path: Path) -> None:
-        write_csv([_success("a/b", 4.1, "LOW"), _failed("c/d")], tmp_path / "r.csv")
+        write_csv([_success("a/b", 4.1), _failed("c/d")], tmp_path / "r.csv")
         content = (tmp_path / "r.csv").read_text()
         assert "repo_id" in content
         assert "a/b" in content
@@ -226,12 +252,13 @@ class TestWriteCsv:
         assert not (tmp_path / "empty.csv").exists()
 
     def test_list_fields_joined_to_string(self, tmp_path: Path) -> None:
-        r = _success("a/b", 5.0, "MEDIUM")
-        r.top_flags = ["FLAG_A", "FLAG_B"]
+        r = _success("a/b", 5.0, "review", "MEDIUM", reasons=["INTRA_OUTLIER", "RANK_MISMATCH"])
+        r.top_findings = ["RULE_A: first", "RULE_B: second"]
         r.hf_tags = ["peft", "lora", "safetensors"]
         write_csv([r], tmp_path / "r.csv")
         content = (tmp_path / "r.csv").read_text()
-        assert "FLAG_A" in content
+        assert "RULE_A: first | RULE_B: second" in content
+        assert "INTRA_OUTLIER,RANK_MISMATCH" in content
         assert "peft" in content
 
 
@@ -243,10 +270,12 @@ class TestWriteCsv:
 class TestWriteAggregate:
     def _results(self) -> list[ScanResult]:
         return [
-            _success("a/m1", 4.1, "LOW"),
-            _success("a/m2", 9.5, "MEDIUM"),
-            _success("a/m3", 18.7, "HIGH"),
-            _success("a/m4", 3.2, "LOW", ts="INIT_ONLY"),
+            _success("a/m1", 1.1),
+            _success("a/m2", 4.2, "review", "MEDIUM", reasons=["INTRA_OUTLIER", "NO_REFERENCE_PROFILE"]),
+            _success("a/m3", 9.7, "review", "MEDIUM",
+                     reasons=["INTRA_OUTLIER", "RANK_MISMATCH", "SIBLING_EXECUTABLE"]),
+            _success("a/m4", None, ts="init_only"),
+            _success("a/m6", 2.0, "review", "MEDIUM", reasons=["FULL_WEIGHT_REPLACEMENT"]),
             _failed("a/m5"),
         ]
 
@@ -255,35 +284,57 @@ class TestWriteAggregate:
 
     def test_totals_correct(self, tmp_path: Path) -> None:
         agg = write_aggregate(self._results(), tmp_path / "agg.json", self._candidates(), 7, 5)
-        assert agg["totals"]["attempted"] == 5
-        assert agg["totals"]["succeeded"] == 4
+        assert agg["totals"]["attempted"] == 6
+        assert agg["totals"]["succeeded"] == 5
         assert agg["totals"]["failed"] == 1
         assert agg["totals"]["discovered"] == 7
 
-    def test_risk_distribution(self, tmp_path: Path) -> None:
+    def test_action_distribution(self, tmp_path: Path) -> None:
         agg = write_aggregate(self._results(), tmp_path / "agg.json", [], 5, 5)
-        assert agg["risk_level_distribution"]["LOW"] == 2
-        assert agg["risk_level_distribution"]["MEDIUM"] == 1
-        assert agg["risk_level_distribution"]["HIGH"] == 1
+        assert agg["action_distribution"] == {"allow": 2, "review": 3}
 
-    def test_training_status_distribution(self, tmp_path: Path) -> None:
+    def test_level_distribution(self, tmp_path: Path) -> None:
         agg = write_aggregate(self._results(), tmp_path / "agg.json", [], 5, 5)
-        assert agg["training_status_distribution"]["TRAINED"] == 3
-        assert agg["training_status_distribution"]["INIT_ONLY"] == 1
+        assert agg["level_distribution"] == {"LOW": 2, "MEDIUM": 3}
 
-    def test_top_suspicious_ordered_by_score(self, tmp_path: Path) -> None:
+    def test_training_state_distribution(self, tmp_path: Path) -> None:
         agg = write_aggregate(self._results(), tmp_path / "agg.json", [], 5, 5)
-        top = agg["top_suspicious_by_ensemble_score"]
-        assert len(top) >= 1
-        assert top[0]["ensemble_score"] == pytest.approx(18.7, abs=0.01)
-        assert top[0]["repo_id"] == "a/m3"
+        assert agg["training_state_distribution"]["trained"] == 4
+        assert agg["training_state_distribution"]["init_only"] == 1
+
+    def test_reason_code_distribution_counts_adapters(self, tmp_path: Path) -> None:
+        agg = write_aggregate(self._results(), tmp_path / "agg.json", [], 5, 5)
+        assert agg["reason_code_distribution"]["INTRA_OUTLIER"] == 2
+        assert agg["reason_code_distribution"]["RANK_MISMATCH"] == 1
+
+    def test_top_suspicious_ordered_by_max_robust_z(self, tmp_path: Path) -> None:
+        agg = write_aggregate(self._results(), tmp_path / "agg.json", [], 5, 5)
+        top = agg["top_suspicious_by_max_robust_z"]
+        assert [e["repo_id"] for e in top] == ["a/m3", "a/m2", "a/m6", "a/m1"]
+        assert top[0]["max_robust_z"] == pytest.approx(9.7)
+        # adapters without an intra comparison are not ranked
+        assert all(e["repo_id"] != "a/m4" for e in top)
+
+    def test_top_by_structural_codes(self, tmp_path: Path) -> None:
+        agg = write_aggregate(self._results(), tmp_path / "agg.json", [], 5, 5)
+        top = agg["top_suspicious_by_structural_codes"]
+        assert [e["repo_id"] for e in top] == ["a/m3", "a/m6"]
+        assert sorted(top[0]["structural_codes"]) == ["RANK_MISMATCH", "SIBLING_EXECUTABLE"]
+        # non-structural codes are not counted as structural
+        assert "INTRA_OUTLIER" not in top[0]["structural_codes"]
+
+    def test_top_n_limits_lists(self, tmp_path: Path) -> None:
+        agg = write_aggregate(self._results(), tmp_path / "agg.json", [], 5, 1)
+        assert len(agg["top_suspicious_by_max_robust_z"]) == 1
+        assert len(agg["top_suspicious_by_structural_codes"]) == 1
 
     def test_counts_convenience_keys(self, tmp_path: Path) -> None:
         agg = write_aggregate(self._results(), tmp_path / "agg.json", [], 5, 5)
-        assert agg["counts"]["INIT_ONLY"] == 1
-        assert agg["counts"]["LOW"] == 2
-        assert agg["counts"]["HIGH"] == 1
-        assert agg["counts"]["CRITICAL"] == 0
+        assert agg["counts"]["allow"] == 2
+        assert agg["counts"]["review"] == 3
+        assert agg["counts"]["block"] == 0
+        assert agg["counts"]["init_only"] == 1
+        assert agg["counts"]["with_structural_codes"] == 2
 
     def test_failure_counts(self, tmp_path: Path) -> None:
         agg = write_aggregate(self._results(), tmp_path / "agg.json", [], 5, 5)
@@ -296,15 +347,36 @@ class TestWriteAggregate:
         with p.open() as f:
             data = json.load(f)
         assert "generated_at" in data
-        assert "framing" in data
+        assert "uncalibrated" in data["framing"]
         assert "totals" in data
-        assert "ensemble_score_percentiles" in data
+        assert "max_robust_z_percentiles" in data
 
-    def test_percentiles_computed(self, tmp_path: Path) -> None:
+    def test_max_robust_z_stats(self, tmp_path: Path) -> None:
         agg = write_aggregate(self._results(), tmp_path / "agg.json", [], 5, 5)
-        pcts = agg["ensemble_score_percentiles"]
-        assert "p50" in pcts
-        assert pcts["p50"] > 0
+        pcts = agg["max_robust_z_percentiles"]
+        assert pcts["p50"] == pytest.approx(3.1)  # median of 1.1, 2.0, 4.2, 9.7
+        assert agg["max_robust_z_mean"] == pytest.approx((1.1 + 4.2 + 9.7 + 2.0) / 4)
+        assert agg["n_with_intra_anomaly"] == 4
+
+    def test_markdown_report_uses_new_sections(self, tmp_path: Path) -> None:
+        results = self._results()
+        agg = write_aggregate(results, tmp_path / "agg.json", [], 5, 5)
+        report = tmp_path / "report.md"
+        write_markdown_report(agg, results, report, 5)
+        text = report.read_text()
+        assert "Verdict Action Distribution" in text
+        assert "Training State Distribution" in text
+        assert "uncalibrated" in text
+        assert "not detection accuracy" in text
+        assert "`a/m3`" in text
+        assert "ensemble" not in text.lower()
+
+    def test_markdown_report_with_no_success(self, tmp_path: Path) -> None:
+        results = [_failed("x/y")]
+        agg = write_aggregate(results, tmp_path / "agg.json", [], 1, 5)
+        report = tmp_path / "report.md"
+        write_markdown_report(agg, results, report, 1)
+        assert "No intra-adapter comparison" in report.read_text()
 
 
 # ---------------------------------------------------------------------------
@@ -313,58 +385,21 @@ class TestWriteAggregate:
 
 
 class TestUnsupportedArchitectureClassification:
-    """Adapters without standard lora_A/lora_B pairs get status=unsupported_architecture."""
+    """A scan that finds no LoRA A/B pair gets status=unsupported_architecture."""
 
-    def _make_safetensors(self, tmp_path: Path, keys: dict) -> Path:
-        """Write a minimal safetensors file with arbitrary tensor keys."""
+    def test_read_tensor_keys_sample(self, tmp_path: Path) -> None:
         import numpy as np
         from safetensors.numpy import save_file
 
         p = tmp_path / "adapter_model.safetensors"
-        save_file({k: np.zeros((4, 4), dtype=np.float32) for k in keys}, str(p))
-        return p
+        save_file({f"t{i}.weight": np.zeros((2, 2), dtype=np.float32) for i in range(15)}, str(p))
+        sample = read_tensor_keys_sample(p)
+        assert len(sample) == 10
 
-    def test_no_lora_keys_is_unsupported(self, tmp_path: Path) -> None:
-        st = self._make_safetensors(
-            tmp_path,
-            {"model.weight": None, "model.bias": None},
-        )
-        is_supported, keys_sample = check_lora_architecture(st)
-        assert is_supported is False
-        assert len(keys_sample) <= 10
-
-    def test_single_lora_pair_is_unsupported(self, tmp_path: Path) -> None:
-        # One pair is below the _MIN_LORA_PAIRS=2 threshold
-        import numpy as np
-        from safetensors.numpy import save_file
-
+    def test_read_tensor_keys_sample_on_garbage(self, tmp_path: Path) -> None:
         p = tmp_path / "adapter_model.safetensors"
-        save_file(
-            {
-                "base.q_proj.lora_A.weight": np.zeros((4, 8), dtype=np.float32),
-                "base.q_proj.lora_B.weight": np.zeros((8, 4), dtype=np.float32),
-            },
-            str(p),
-        )
-        is_supported, _ = check_lora_architecture(p)
-        assert is_supported is False
-
-    def test_two_lora_pairs_is_supported(self, tmp_path: Path) -> None:
-        import numpy as np
-        from safetensors.numpy import save_file
-
-        p = tmp_path / "adapter_model.safetensors"
-        save_file(
-            {
-                "base.q_proj.lora_A.weight": np.zeros((4, 8), dtype=np.float32),
-                "base.q_proj.lora_B.weight": np.zeros((8, 4), dtype=np.float32),
-                "base.v_proj.lora_A.weight": np.zeros((4, 8), dtype=np.float32),
-                "base.v_proj.lora_B.weight": np.zeros((8, 4), dtype=np.float32),
-            },
-            str(p),
-        )
-        is_supported, _ = check_lora_architecture(p)
-        assert is_supported is True
+        p.write_bytes(b"not a safetensors file")
+        assert read_tensor_keys_sample(p) == []
 
     def test_scan_one_adapter_returns_unsupported_status(self, tmp_path: Path) -> None:
         import numpy as np
@@ -374,32 +409,50 @@ class TestUnsupportedArchitectureClassification:
         save_file({"dense.weight": np.zeros((8, 8), dtype=np.float32)}, str(p))
 
         candidate = CandidateRepo(repo_id="author/ia3-adapter")
-        result = scan_one_adapter(candidate, p, {})
+        result = scan_one_adapter(candidate, p)
 
         assert result.status == "unsupported_architecture"
-        assert result.training_status == "UNSUPPORTED"
-        assert result.risk_level == "UNKNOWN"
+        assert result.scan_status == "failed"
         assert result.error_type == "no_lora_pairs_found"
-        assert isinstance(result.tensor_keys_sample, list)
-        assert result.ensemble_score is None
+        assert result.tensor_keys_sample == ["dense.weight"]
+        assert result.action is None
+        assert result.max_robust_z is None
+
+    def test_scan_one_adapter_single_pair_is_scanned(self, tmp_path: Path) -> None:
+        """One LoRA pair is enough for the 2.0 scanner (the 1.x two-pair minimum is gone)."""
+        import numpy as np
+        from safetensors.numpy import save_file
+
+        p = tmp_path / "adapter_model.safetensors"
+        rng = np.random.default_rng(0)
+        save_file(
+            {
+                "base.q_proj.lora_A.weight": rng.standard_normal((4, 8)).astype(np.float32),
+                "base.q_proj.lora_B.weight": rng.standard_normal((8, 4)).astype(np.float32),
+            },
+            str(p),
+        )
+        result = scan_one_adapter(CandidateRepo(repo_id="a/one-pair"), p)
+        assert result.status == "success"
+        assert result.n_modules == 1
 
     def test_aggregate_counts_unsupported_separately(self, tmp_path: Path) -> None:
         results = [
-            _success("a/ok", 4.0, "LOW"),
+            _success("a/ok", 4.0),
             ScanResult(
                 repo_id="b/ia3",
                 scan_timestamp=_ts(),
                 status="unsupported_architecture",
-                training_status="UNSUPPORTED",
-                risk_level="UNKNOWN",
+                scan_status="failed",
                 error_type="no_lora_pairs_found",
             ),
         ]
         agg = write_aggregate(results, tmp_path / "agg.json", [], 2, 5)
         assert agg["totals"]["unsupported_architecture"] == 1
         assert agg["totals"]["succeeded"] == 1
-        # unsupported_architecture must NOT appear in risk_level_distribution
-        assert "UNKNOWN" not in agg["risk_level_distribution"]
+        # unsupported_architecture must NOT appear in the distributions
+        assert agg["action_distribution"] == {"allow": 1}
+        assert "unknown" not in agg["level_distribution"]
 
 
 class TestAnalysisFailedClassification:
@@ -426,15 +479,89 @@ class TestAnalysisFailedClassification:
         monkeypatch.setattr(hs, "run_m1", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("synthetic M1 error")))
 
         candidate = CandidateRepo(repo_id="author/broken")
-        result = scan_one_adapter(candidate, p, {})
+        result = scan_one_adapter(candidate, p)
 
         assert result.status == "analysis_failed"
         assert result.error_type == "RuntimeError"
         assert "synthetic M1 error" in (result.error_detail or "")
 
+    def test_failed_scan_is_analysis_failed(self, tmp_path: Path) -> None:
+        """A failed scan for a reason other than 'no LoRA pair' is analysis_failed."""
+        p = tmp_path / "adapter_model.safetensors"
+        p.write_bytes(b"\x08\x00\x00\x00\x00\x00\x00\x00{broken}")
+
+        result = scan_one_adapter(CandidateRepo(repo_id="author/corrupt"), p)
+
+        assert result.status == "analysis_failed"
+        assert result.scan_status == "failed"
+        assert result.error_type
+        assert result.error_detail
+
+    def test_successful_scan_populates_record(self, tmp_path: Path) -> None:
+        import numpy as np
+        from safetensors.numpy import save_file
+
+        rng = np.random.default_rng(0)
+        tensors = {}
+        for layer in range(4):
+            for mod in ("q_proj", "v_proj"):
+                base = f"base_model.model.model.layers.{layer}.self_attn.{mod}"
+                tensors[f"{base}.lora_A.weight"] = rng.standard_normal((4, 32)).astype(np.float32)
+                tensors[f"{base}.lora_B.weight"] = rng.standard_normal((32, 4)).astype(np.float32)
+        p = tmp_path / "adapter_model.safetensors"
+        save_file(tensors, str(p))
+        (tmp_path / "adapter_config.json").write_text(json.dumps(
+            {"peft_type": "LORA", "r": 4, "lora_alpha": 8, "target_modules": ["q_proj", "v_proj"]}
+        ))
+
+        result = scan_one_adapter(CandidateRepo(repo_id="author/good", hf_downloads=7), p, mode="fast")
+
+        assert result.status == "success"
+        assert result.scan_status in ("ok", "degraded")
+        assert result.action in ("allow", "review", "block")
+        assert result.level in ("LOW", "MEDIUM", "HIGH", "CRITICAL")
+        assert result.training_state == "trained"
+        assert result.rank_declared == 4
+        assert result.n_modules == 8
+        assert isinstance(result.reason_codes, list) and result.reason_codes
+        assert len(result.top_findings) == min(result.n_findings, 5)
+        assert all(len(f) <= 120 for f in result.top_findings)
+        assert result.hf_downloads == 7
+
+    def test_top_findings_truncated(self, tmp_path: Path, monkeypatch) -> None:
+        """At most 5 findings, each formatted 'RULE_ID: title' and capped at 120 chars."""
+        from types import SimpleNamespace
+
+        from benchmarks import hub_scanner as hs
+
+        p = tmp_path / "adapter_model.safetensors"
+        p.write_bytes(b"x")
+        findings = [SimpleNamespace(rule_id=f"RULE_{i}", title="t" * 200) for i in range(8)]
+        fake = SimpleNamespace(
+            status="ok",
+            errors=[],
+            anomaly=SimpleNamespace(intra=SimpleNamespace(max_robust_z=6.5, n_outlier_modules=2)),
+            verdict=SimpleNamespace(action="review", level=SimpleNamespace(value="MEDIUM"),
+                                    reasons=[SimpleNamespace(code="INTRA_OUTLIER")]),
+            adapter=SimpleNamespace(training_state="trained", rank_declared=16),
+            coverage=SimpleNamespace(n_modules=12),
+            findings=findings,
+        )
+        monkeypatch.setattr(hs, "run_m1", lambda *a, **kw: fake)
+
+        result = scan_one_adapter(CandidateRepo(repo_id="a/b"), p)
+
+        assert result.n_findings == 8
+        assert len(result.top_findings) == 5
+        assert result.top_findings[0].startswith("RULE_0: ")
+        assert all(len(f) == 120 for f in result.top_findings)
+        assert result.max_robust_z == pytest.approx(6.5)
+        assert result.n_outlier_modules == 2
+        assert result.reason_codes == ["INTRA_OUTLIER"]
+
     def test_failure_breakdown_in_aggregate(self, tmp_path: Path) -> None:
         results = [
-            _success("a/ok", 4.0, "LOW"),
+            _success("a/ok", 4.0),
             ScanResult(
                 repo_id="b/broken",
                 scan_timestamp=_ts(),
@@ -471,7 +598,7 @@ class TestParallelAppendSafety:
                 repo_id=f"author/model-{i}",
                 scan_timestamp=_ts(),
                 status="success",
-                ensemble_score=float(i),
+                max_robust_z=float(i),
             )
             append_result(r, p, lock)
 
@@ -501,7 +628,7 @@ class TestParallelAppendSafety:
                 repo_id=f"repo-{i}",
                 scan_timestamp=_ts(),
                 status="success",
-                top_flags=["FLAG_A: " + "x" * 100],  # moderately long line
+                top_findings=["RULE_A: " + "x" * 100],  # moderately long line
             )
             append_result(r, p, lock)
 
@@ -598,7 +725,11 @@ class TestLocalOnlyMode:
         assert len(lines) == 1
         obj = json.loads(lines[0])
         assert obj["repo_id"] == repo_id
-        assert obj["status"] in ("success", "unsupported_architecture")
+        assert obj["status"] == "success"
+        assert obj["action"] in ("allow", "review")
+        assert obj["n_modules"] == 2
+        assert (output_dir / "report.md").exists()
+        assert (output_dir / "aggregate.json").exists()
 
     def test_not_cached_when_file_missing(self, tmp_path: Path) -> None:
         """If the adapter file is absent in local cache, status must be not_cached."""

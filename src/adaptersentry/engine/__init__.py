@@ -1,13 +1,11 @@
 """AdapterSentry scan engine — batch orchestration, caching, and typed schema contracts.
 
-This package provides the production-scale scan infrastructure built on top of
-the M1 static analyzer core. It is designed for scanning large adapter corpora
+This package runs adaptersentry.scanner.scan over large adapter corpora. It is designed for scanning large adapter corpora
 (10K+) with incremental re-scan, resumable batches, and stable public contracts.
 
 Public surface
 --------------
-engine.schemas      — versioned Pydantic contracts (ScanResult, ScanIdentity, ...)
-engine.config       — AnalyzerConfig and deterministic config hash
+engine.schemas      — batch requests, artifact identity, cache entries, CombinedReport
 engine.identity     — ArtifactIdentityResolver (SHA-256 content + header hashes)
 engine.manifest     — ManifestDB (SQLite-backed batch state machine)
 engine.cache        — CacheStore (content-addressed local result cache)

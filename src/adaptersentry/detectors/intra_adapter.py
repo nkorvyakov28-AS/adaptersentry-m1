@@ -18,8 +18,8 @@ REVIEW_Z is set far above that level for this reason.
 
 Security Notes:
     - Pure numpy/scipy on feature values; no I/O.
-    - Degenerate families (fewer than MIN_FAMILY modules, zero spread) are
-      skipped and never produce spurious z-values.
+    - Degenerate families (fewer than MIN_FAMILY = 16 modules, zero spread)
+      are skipped and never produce spurious z-values.
 """
 
 from __future__ import annotations
@@ -41,7 +41,11 @@ from adaptersentry.schemas.result import (
 
 OUTLIER_Z = 3.5
 REVIEW_Z = 8.0
-MIN_FAMILY = 5
+# Robust z from small families is unreliable: MAD from a handful of points is
+# noisy, and detrending consumes degrees of freedom. On synthetic clean adapters
+# the maximum |z| reached 12-70 with 6-12 modules per family, but stayed ≤ 6.6
+# from 16 modules up (injected payloads: ≥ 48). Real models have ≥ 16 layers.
+MIN_FAMILY = 16
 MIN_DETREND = 6
 _MAD_TO_SIGMA = 1.4826
 _MEANAD_TO_SIGMA = 1.2533

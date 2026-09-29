@@ -10,9 +10,9 @@ before the next, so peak memory is bounded by the largest pair (~20 MB for a
 70B model at r=64) instead of the whole adapter (~3.3 GB).
 
 Security Notes:
-    - Reuses the v1.0.3 guards: regular file, bounded size, bounded header,
-      per-entry dtype/shape/byte-length/offset/rank validation before any
-      allocation (see parsers.safetensors).
+    - All guards of parsers.safetensors run first: regular file, bounded size,
+      bounded header, per-entry dtype/shape/byte-length/offset validation and
+      the LoRA rank limit, before any allocation.
     - Nothing is skipped silently: every tensor ends up in exactly one bucket
       of the inventory, and load failures during iteration are returned, not
       swallowed.
@@ -32,13 +32,13 @@ from safetensors import safe_open
 
 from adaptersentry.parsers.names import ModuleLocation, locate, parse_key
 from adaptersentry.parsers.safetensors import (
-    _BF16_DTYPE,
+    BF16_DTYPE,
+    MAX_LORA_RANK,
     SkippedTensor,
-    _check_regular_file,
-    _header_entry_problem,
-    _load_bf16_as_float32,
-    _MAX_LORA_RANK,
-    _read_sf_header,
+    check_regular_file,
+    header_entry_problem,
+    load_bf16_as_float32,
+    read_header,
 )
 from adaptersentry.schemas.errors import ErrorCategory
 
@@ -129,8 +129,8 @@ def _pair_problem(a: TensorEntry, b: TensorEntry) -> str | None:
         return f"rank mismatch: A{list(a.shape)} vs B{list(b.shape)}"
     if a.shape[0] < 1:
         return "rank 0"
-    if a.shape[0] > _MAX_LORA_RANK:
-        return f"LoRA rank {a.shape[0]} exceeds limit {_MAX_LORA_RANK}"
+    if a.shape[0] > MAX_LORA_RANK:
+        return f"LoRA rank {a.shape[0]} exceeds limit {MAX_LORA_RANK}"
     return None
 
 
@@ -142,8 +142,8 @@ def open_adapter(path: Path) -> AdapterInventory:
         ValueError: If the file is not a regular, bounded safetensors file or
             its header is invalid.
     """
-    resolved = _check_regular_file(path)
-    header, data_offset = _read_sf_header(resolved)
+    resolved = check_regular_file(path)
+    header, data_offset = read_header(resolved)
     data_len = resolved.stat().st_size - data_offset
     # safetensors rejects the whole file if any header entry is inconsistent; the
     # real loader would refuse it too, so this is a failed parse, found up front.
@@ -166,7 +166,7 @@ def open_adapter(path: Path) -> AdapterInventory:
     halves: dict[tuple[str, bool], dict[str, TensorEntry]] = {}
     for key in keys:
         info = header[key]
-        problem = _header_entry_problem(info, data_len)
+        problem = header_entry_problem(info, data_len)
         if problem is not None:
             inv.not_analyzed.append(SkippedTensor(key, problem, ErrorCategory.MALFORMED))
             continue
@@ -217,8 +217,8 @@ def open_adapter(path: Path) -> AdapterInventory:
 
 
 def _load(handle: Any, inv: AdapterInventory, entry: TensorEntry) -> np.ndarray:
-    if entry.dtype == _BF16_DTYPE:
-        return _load_bf16_as_float32(inv.path, entry.key, inv.header, inv.data_offset)
+    if entry.dtype == BF16_DTYPE:
+        return load_bf16_as_float32(inv.path, entry.key, inv.header, inv.data_offset)
     return np.asarray(handle.get_tensor(entry.key), dtype=np.float32)
 
 

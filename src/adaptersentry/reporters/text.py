@@ -1,174 +1,100 @@
-"""Human-readable text reporter for AdapterReport.
+"""Human-readable text report for a ScanResult 2.0.0.
 
-Produces concise terminal output suitable for developer workflows.
-Degraded and malformed states are prominently shown.
+Every string that originates in the adapter file (paths, tensor keys, module
+names, messages built from them) goes through ``safe_text`` so control or bidi
+characters cannot forge terminal output.
 """
 
 from __future__ import annotations
 
 from adaptersentry.reporting.sanitize import safe_text
-from adaptersentry.schemas.adapter_report import AdapterReport, AnalysisMode, ParseStatus
-from adaptersentry.schemas.errors import ErrorCategory
-from adaptersentry.schemas.finding import Severity
+from adaptersentry.schemas.severity import Severity
+from adaptersentry.schemas.result import ScanResult
 
-# ANSI colour codes (disabled when --no-color)
 _RESET = "\033[0m"
 _BOLD = "\033[1m"
+_DIM = "\033[2m"
 _RED = "\033[31m"
 _YELLOW = "\033[33m"
-_CYAN = "\033[36m"
 _GREEN = "\033[32m"
-_DIM = "\033[2m"
-
-_SEVERITY_COLOUR = {
-    Severity.CRITICAL: _RED + _BOLD,
-    Severity.HIGH: _RED,
-    Severity.MEDIUM: _YELLOW,
-    Severity.LOW: _GREEN,
-}
+_ACTION_COLOUR = {"allow": _GREEN, "review": _YELLOW, "block": _RED}
+_SEV_COLOUR = {Severity.LOW: _DIM, Severity.MEDIUM: _YELLOW, Severity.HIGH: _RED, Severity.CRITICAL: _RED}
+_SEV_ORDER = {Severity.CRITICAL: 0, Severity.HIGH: 1, Severity.MEDIUM: 2, Severity.LOW: 3}
 
 
-def _colour(text: str, code: str, no_color: bool) -> str:
-    if no_color:
-        return text
-    return f"{code}{text}{_RESET}"
+def _c(text: str, code: str, no_color: bool) -> str:
+    return text if no_color or not code else f"{code}{text}{_RESET}"
 
 
-def render(report: AdapterReport, no_color: bool = False) -> str:
-    """Render AdapterReport as a human-readable text string.
-
-    Args:
-        report: Completed M1 AdapterReport.
-        no_color: If True, omit ANSI escape sequences.
-
-    Returns:
-        Multi-line string ready to write to stdout.
-    """
+def render(result: ScanResult, *, no_color: bool = False, max_findings: int = 15) -> str:
+    """Render a ScanResult as text."""
+    v = result.verdict
     lines: list[str] = []
-    rs = report.risk_summary
+    name = safe_text(result.artifact.provenance.path) if result.artifact else "(unreadable file)"
+    lines.append(_c(f"AdapterSentry {safe_text(result.scan.analyzer_version)} · {name}", _BOLD, no_color))
+    lines.append("=" * 64)
 
-    # ── Header ────────────────────────────────────────────────────────────────
-    ps = report.parse_status
-    ps_tag = f"  [parse:{ps.value}]"
-    if ps == ParseStatus.FAILED:
-        ps_colour = _RED + _BOLD
-    elif ps == ParseStatus.DEGRADED:
-        ps_colour = _YELLOW
-    else:
-        ps_colour = _GREEN
+    behavioural = " · behavioural check recommended" if v.m2_recommended else ""
     lines.append(
-        _colour("AdapterSentry M1 — Static Analysis Report", _BOLD, no_color)
-        + _colour(ps_tag, ps_colour, no_color)
+        "Verdict:  "
+        + _c(v.action.upper(), _ACTION_COLOUR[v.action], no_color)
+        + f" ({v.level.value}) · confidence {v.confidence.level}{behavioural}"
     )
-    lines.append("=" * 60)
-    lines.append(f"Target:   {safe_text(report.scan_target.path)}")
-    if report.scan_target.file_size_bytes is not None:
-        size_mb = report.scan_target.file_size_bytes / (1024 * 1024)
-        lines.append(f"Size:     {size_mb:.1f} MB")
-    lines.append(f"Scanned:  {report.completed_at}")
+    lines.append(f"Status:   {result.status} · policy {result.scan.policy} · mode {result.scan.mode}")
+    if v.reasons:
+        lines.append("Why:")
+        for r in v.reasons:
+            lines.append(f"  - [{_c(r.severity.value, _SEV_COLOUR[r.severity], no_color)}] "
+                         f"{safe_text(r.code)}: {safe_text(r.message)}")
 
-    # ── Analysis mode warning ──────────────────────────────────────────────────
-    if report.analysis_mode == AnalysisMode.DEGRADED:
-        lines.append(_colour("⚠  DEGRADED ANALYSIS — some detectors failed", _YELLOW, no_color))
-    elif report.analysis_mode == AnalysisMode.FAILED:
-        lines.append(_colour("✗  ANALYSIS FAILED", _RED, no_color))
-
-    # ── Risk summary ──────────────────────────────────────────────────────────
-    lines.append("")
-    ens_level = rs.ensemble_risk_level
-    ens_col = _SEVERITY_COLOUR.get(ens_level, "")
-    lines.append(
-        f"Risk:     {_colour(ens_level.value, ens_col, no_color)}"
-        f"  (ensemble {rs.ensemble_score:.1f}/100 · rule {rs.overall_risk}/100)"
-    )
-    lines.append(
-        f"Status:   {rs.training_status.value}"
-        f" · {rs.n_layers} layer(s)"
-        f" · {rs.false_positive_suppressed} init artifact(s) suppressed"
-    )
-    if rs.cross_layer_consistency < 0.3 and rs.n_layers > 1:
+    a = result.adapter
+    if a.format != "unknown":
+        rank = a.rank_actual
+        rank_txt = f"r={rank.max}" if rank and rank.min == rank.max else (f"r={rank.distinct}" if rank else "r=?")
+        if a.rank_declared is not None:
+            rank_txt += f" (declared {a.rank_declared})"
+        alpha = f", α={a.lora_alpha:g}" if a.lora_alpha is not None else ""
+        layers = f", {a.n_model_layers} layers" if a.n_model_layers else ""
         lines.append(
-            _colour(
-                f"  ↳ Low cross-layer consistency ({rs.cross_layer_consistency:.3f}) — anomaly concentration",
-                _YELLOW,
-                no_color,
-            )
+            f"Adapter:  {a.format}, family {safe_text(a.base_family)} ({a.base_family_source}){layers}, "
+            f"{rank_txt}{alpha}, scaling {a.scaling}, training {a.training_state}"
         )
+    c = result.coverage
+    lines.append(f"Coverage: {c.n_modules_analyzed}/{c.n_modules} modules analysed; "
+                 f"{c.n_not_analyzed} tensor(s) not analysed")
+    for item in c.not_analyzed[:5]:
+        lines.append(_c(f"  · {safe_text(item.tensor_key)} — {safe_text(item.reason)}", _DIM, no_color))
 
-    # ── Adapter metadata ──────────────────────────────────────────────────────
-    meta = report.adapter_metadata
-    if meta.base_model or meta.claimed_rank:
-        lines.append("")
-        if meta.base_model:
-            lines.append(f"Base model: {meta.base_model}")
-        if meta.claimed_rank is not None:
-            lines.append(f"Rank:       r={meta.claimed_rank}")
-        if meta.target_modules:
-            lines.append(f"Targets:    {', '.join(meta.target_modules[:6])}")
+    intra = result.anomaly.intra
+    if intra is not None:
+        gini = f" · energy Gini {intra.energy_gini:.2f}" if intra.energy_gini is not None else ""
+        lines.append(f"Intra:    max robust z {intra.max_robust_z:.1f} · "
+                     f"{intra.n_outlier_modules} outlier module(s){gini}")
+    if result.anomaly.top_contributors:
+        lines.append("Top contributors:")
+        for tc in result.anomaly.top_contributors[:5]:
+            where = f"layer {tc.layer}" if tc.layer is not None else "—"
+            lines.append(f"  z={tc.z:+.1f}  {safe_text(tc.feature)} of {safe_text(tc.module_type)}, {where}")
 
-    # ── Findings ──────────────────────────────────────────────────────────────
-    if report.findings:
-        lines.append("")
-        lines.append(_colour(f"Findings ({len(report.findings)}):", _BOLD, no_color))
-        for finding in sorted(
-            report.findings,
-            key=lambda f: list(Severity).index(f.severity),
-        ):
-            col = _SEVERITY_COLOUR.get(finding.severity, "")
-            sev = _colour(f"[{finding.severity.value:8s}]", col, no_color)
-            layer_hint = ""
-            if finding.affected_layers:
-                shown = ", ".join(safe_text(name) for name in finding.affected_layers[:2])
-                layer_hint = f"  ({shown}{'…' if len(finding.affected_layers) > 2 else ''})"
-            lines.append(f"  {sev}  {finding.rule_id}{layer_hint}")
-            lines.append(_colour(f"             {safe_text(finding.title)}", _DIM, no_color))
-    else:
-        lines.append("")
-        lines.append(_colour("No findings.", _GREEN, no_color))
+    if result.findings:
+        lines.append(f"Findings ({len(result.findings)}):")
+        for f in sorted(result.findings, key=lambda f: _SEV_ORDER[f.severity])[:max_findings]:
+            loc = ""
+            if f.locations:
+                l0 = f.locations[0]
+                parts = [p for p in (
+                    f"layer {l0.layer}" if l0.layer is not None else None,
+                    safe_text(l0.module) if l0.module else None,
+                ) if p]
+                loc = f"  ({', '.join(parts)})" if parts else ""
+            lines.append(f"  [{_c(f.severity.value, _SEV_COLOUR[f.severity], no_color)}] "
+                         f"{safe_text(f.rule_id)} — {safe_text(f.title)}{loc}")
+        if len(result.findings) > max_findings:
+            lines.append(_c(f"  … and {len(result.findings) - max_findings} more", _DIM, no_color))
 
-    # ── Errors ────────────────────────────────────────────────────────────────
-    if report.errors:
-        lines.append("")
-        lines.append(_colour(f"Errors ({len(report.errors)}):", _YELLOW, no_color))
-        for err in report.errors:
-            cat_col = _RED if err.category == ErrorCategory.MALFORMED else _YELLOW
-            lines.append(
-                f"  {_colour(err.category.value.upper(), cat_col, no_color)}"
-                f"  {err.code}: {err.message}"
-            )
-            if err.detail:
-                lines.append(_colour(f"    {err.detail}", _DIM, no_color))
-
-    # ── Top-10 layers by delta_norm_ratio ─────────────────────────────────────
-    ranked = sorted(
-        [tr for tr in report.tensor_records if tr.norm_features is not None],
-        key=lambda tr: tr.norm_features.delta_norm_ratio,  # type: ignore[union-attr]
-        reverse=True,
-    )
-    if ranked:
-        lines.append("")
-        lines.append(_colour("ΔW norm — top layers by delta_norm_ratio:", _BOLD, no_color))
-        lines.append(
-            _colour(
-                "  (ratio = ||B@A||_F / (||A||_F·||B||_F); "
-                "future: divide by rank/lora_alpha for cross-adapter comparison)",
-                _DIM,
-                no_color,
-            )
-        )
-        for i, tr in enumerate(ranked[:10], 1):
-            nf = tr.norm_features  # type: ignore[union-attr]
-            name = safe_text(tr.layer_name)
-            short = name.split(".")[-3] if "." in name else name
-            lines.append(
-                f"  {i:2d}. {short:<28s}"
-                f"  ratio={nf.delta_norm_ratio:.4f}"
-                f"  fro={nf.fro_norm_delta:.4f}"
-                f"  max={nf.max_abs_delta:.4f}"
-                f"  mean={nf.mean_abs_delta:.4f}"
-            )
-        if len(ranked) > 10:
-            lines.append(_colour(f"  … and {len(ranked) - 10} more layer(s)", _DIM, no_color))
-
-    lines.append("")
-    return "\n".join(lines)
+    if v.confidence.limiting_factors:
+        lines.append(_c("Limits: " + "; ".join(safe_text(x) for x in v.confidence.limiting_factors),
+                        _DIM, no_color))
+    for e in result.errors:
+        lines.append(_c(f"Error: {safe_text(e.code)}: {safe_text(e.message)}", _RED, no_color))
+    return "\n".join(lines) + "\n"

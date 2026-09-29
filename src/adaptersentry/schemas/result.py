@@ -37,7 +37,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from adaptersentry.schemas.errors import ScanError
-from adaptersentry.schemas.finding import Severity
+from adaptersentry.schemas.severity import Severity
 
 SCHEMA_VERSION = "2.0.0"
 

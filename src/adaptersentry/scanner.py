@@ -11,7 +11,7 @@ Pipeline:
     5. intra         compare each module with its family (robust z over depth)
     6. structural    full-weight replacement, router LoRA, rank mismatch,
                      executable siblings, DoRA, …
-    7. verdict       one rule set (scoring.verdict_v2), fail-closed
+    7. verdict       one rule set (scoring.verdict), fail-closed
 
 ``scan`` never raises: every failure becomes a structured result whose action
 is at least "review".
@@ -37,11 +37,11 @@ import numpy as np
 
 from adaptersentry.detectors.intra_adapter import OUTLIER_Z, REVIEW_Z, ModuleEntry, compare_within_adapter
 from adaptersentry.detectors.structural import find_siblings, structural_findings
-from adaptersentry.features.spectral_v2 import head_features, module_features
+from adaptersentry.features.spectral import head_features, module_features
 from adaptersentry.parsers.adapter_config import read_adapter_config, resolve_scale
 from adaptersentry.parsers.adapter_file import AdapterInventory, iter_pairs, open_adapter
 from adaptersentry.schemas.errors import ScanError, ScanPhase
-from adaptersentry.schemas.finding import Severity
+from adaptersentry.schemas.severity import Severity
 from adaptersentry.schemas.result import (
     MAX_LISTED_NOT_ANALYZED,
     SCHEMA_VERSION,
@@ -61,7 +61,7 @@ from adaptersentry.schemas.result import (
     ScanResult,
     TokenConcentration,
 )
-from adaptersentry.scoring.verdict_v2 import derive_verdict
+from adaptersentry.scoring.verdict import derive_verdict
 from adaptersentry.version import __version__
 
 logger = logging.getLogger(__name__)
@@ -85,6 +85,23 @@ def config_hash(mode: Mode, policy: Policy) -> str:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _file_state(path: Path) -> tuple[int, ...] | None:
+    """(device, inode, size, mtime_ns, ctime_ns) of the resolved file, or None.
+
+    Compared before hashing and after analysis: the file is read more than once
+    (hash, header, tensors), and a swap in between would attach this scan's
+    verdict — and its cache entry — to different content. ctime cannot be set
+    by an unprivileged user and changes on every write. Timestamp granularity is
+    the filesystem's (a few ms on tmpfs); a write after the initial snapshot, i.e.
+    during the scan, gets a later timestamp.
+    """
+    try:
+        st = path.resolve().stat()
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
 
 
 def _base_family(declared: str | None) -> str:
@@ -143,6 +160,26 @@ def _failed_result(
     )
 
 
+def failed_result(
+    path: Path,
+    message: str,
+    *,
+    mode: Mode = "full",
+    policy: Policy = "default",
+    run_id: str | None = None,
+) -> ScanResult:
+    """A fail-closed result for a scan that could not run at all (e.g. a worker crash)."""
+    now = _now()
+    cfg_hash = config_hash(mode, policy)
+    info = ScanInfo(
+        scan_id="sha256:" + hashlib.sha256(f"{path}:{cfg_hash}:failed".encode()).hexdigest(),
+        run_id=run_id, analyzer_version=__version__, config_hash=cfg_hash, mode=mode, policy=policy,
+        started_at=now, completed_at=now, wall_time_ms=0,
+    )
+    return _failed_result(Path(path), RuntimeError(message), scan_info=info, artifact=None,
+                          config_present=False)
+
+
 def scan(
     path: Path,
     *,
@@ -174,6 +211,7 @@ def scan(
     include_modules = include_modules or include_heads
     cfg_hash = config_hash(mode, policy)
 
+    state_before = _file_state(path)
     cfg_read = read_adapter_config(path)
     config = cfg_read.config
     siblings = find_siblings(path)
@@ -203,7 +241,7 @@ def scan(
         )
 
     try:
-        return _scan_inventory(
+        result = _scan_inventory(
             path, inv, cfg_read, siblings, artifact, scan_info,
             mode=mode, policy=policy, include_modules=include_modules, include_heads=include_heads,
         )
@@ -211,6 +249,12 @@ def scan(
         logger.error("Analysis of %r failed: %s", path.name, exc)
         return _failed_result(path, exc, scan_info=scan_info(), artifact=artifact,
                               config_present=config is not None)
+    if _file_state(path) != state_before:
+        return _failed_result(
+            path, RuntimeError("file changed during the scan; result discarded"),
+            scan_info=scan_info(), artifact=artifact, config_present=config is not None,
+        )
+    return result
 
 
 def _scan_inventory(path, inv: AdapterInventory, cfg_read, siblings, artifact, scan_info, *,

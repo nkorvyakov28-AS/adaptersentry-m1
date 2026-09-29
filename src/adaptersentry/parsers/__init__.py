@@ -1,24 +1,15 @@
-"""Parsers subpackage — file loading and metadata extraction."""
+"""Parsers: safetensors header guards, adapter inventory and streaming, adapter_config.json."""
 
-from adaptersentry.schemas.errors import ParseErrorClass
-
-from .safetensors import (
-    ParsedTensor,
-    check_lora_architecture,
-    load_adapter,
-    parse_tensors,
-    _group_lora_layers,
-)
-from .metadata import MetadataExtractor, _metadata_depth, parse_adapter_metadata
+from .adapter_config import AdapterConfig, read_adapter_config, resolve_scale
+from .adapter_file import AdapterInventory, LoraPair, PairData, iter_pairs, open_adapter
 
 __all__ = [
-    "ParseErrorClass",
-    "ParsedTensor",
-    "parse_tensors",
-    "load_adapter",
-    "check_lora_architecture",
-    "_group_lora_layers",
-    "MetadataExtractor",
-    "_metadata_depth",
-    "parse_adapter_metadata",
+    "AdapterConfig",
+    "AdapterInventory",
+    "LoraPair",
+    "PairData",
+    "iter_pairs",
+    "open_adapter",
+    "read_adapter_config",
+    "resolve_scale",
 ]
