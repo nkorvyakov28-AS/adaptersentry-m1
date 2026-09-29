@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -119,6 +120,9 @@ class ArtifactIdentityResolver:
         """
         if not path.exists():
             raise FileNotFoundError(f"Adapter file not found: {path}")
+        # Hashing reads to EOF: a FIFO or character device would block or never end.
+        if not stat.S_ISREG(path.stat().st_mode):
+            raise OSError(f"Not a regular file: {path}")
 
         logical_id = _derive_logical_id(path, source)
         content_hash = _sha256_file(path)

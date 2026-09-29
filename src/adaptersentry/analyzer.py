@@ -39,7 +39,11 @@ from adaptersentry.features.distribution import compute_distribution_features
 from adaptersentry.features.layer_stats import detect_layer_anomalies
 from adaptersentry.features.tensor_stats import compute_svd_stats, compute_tensor_stats
 from adaptersentry.parsers.metadata import _metadata_depth, parse_adapter_metadata
-from adaptersentry.parsers.safetensors import _group_lora_layers, load_adapter
+from adaptersentry.parsers.safetensors import (
+    _group_lora_layers,
+    load_adapter,
+    load_adapter_checked,
+)
 from adaptersentry.scoring.risk_scorer import RiskScorer
 
 logger = logging.getLogger(__name__)
@@ -110,7 +114,8 @@ def _run_analysis(
     fast: bool = False,
 ) -> dict[str, Any]:
     """Core M1 analysis pipeline — returns the full dict report."""
-    tensors, metadata = load_adapter(adapter_path)
+    loaded = load_adapter_checked(adapter_path)
+    tensors, metadata = loaded.tensors, loaded.metadata
     layers = _group_lora_layers(tensors)
 
     all_flags: list[str] = []
@@ -321,6 +326,10 @@ def _run_analysis(
         "training_status": training_status,
         "false_positive_suppressed": false_positive_suppressed,
         "inter_layer_similarity_features": _il_feats.model_dump() if _il_feats else None,
+        "skipped_tensors": [
+            {"key": s.key, "reason": s.reason, "category": s.category.value}
+            for s in loaded.skipped
+        ],
         "summary": (
             f"Analyzed {len(layer_reports)} LoRA layer(s). "
             f"Training status: {training_status}. "
@@ -461,10 +470,23 @@ def scan(
                 ),
             ))
 
-    # Derive parse_status from tensor records
-    if any(tr.parse_error == ErrorCategory.MALFORMED for tr in tensor_records):
-        parse_status = ParseStatus.DEGRADED
-    elif any(tr.parse_error is not None for tr in tensor_records):
+    # Tensors present in the file but not analysed are a degraded parse:
+    # the payload may live exactly in what we skipped.
+    skipped = raw.get("skipped_tensors", [])
+    for item in skipped[:_MAX_LISTED_SKIPPED]:
+        errors.append(ScanError.degraded(
+            code="TENSOR_NOT_ANALYZED",
+            message=f"Tensor {item['key']!r} not analysed: {item['reason']}",
+            detail=item["category"],
+        ))
+    if len(skipped) > _MAX_LISTED_SKIPPED:
+        errors.append(ScanError.degraded(
+            code="TENSOR_NOT_ANALYZED",
+            message=f"{len(skipped) - _MAX_LISTED_SKIPPED} more tensor(s) not analysed",
+        ))
+
+    # Derive parse_status from tensor records and skipped tensors
+    if skipped or any(tr.parse_error is not None for tr in tensor_records):
         parse_status = ParseStatus.DEGRADED
     else:
         parse_status = ParseStatus.OK

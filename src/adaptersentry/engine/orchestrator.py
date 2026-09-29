@@ -26,6 +26,7 @@ import hashlib
 import logging
 import multiprocessing
 import os
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -140,6 +141,16 @@ def build_manifest(
 
         if canonical.suffix not in {".safetensors", ".bin"}:
             logger.debug("Skipping non-adapter file: %s", canonical)
+            continue
+
+        # FIFOs and devices would block or stream forever when hashed or parsed.
+        try:
+            is_regular = stat.S_ISREG(canonical.stat().st_mode)
+        except OSError as exc:
+            logger.warning("Skipping unreadable path %s: %s", canonical, exc)
+            continue
+        if not is_regular:
+            logger.warning("Skipping non-regular file: %s", canonical)
             continue
 
         canonical_str = str(canonical)
