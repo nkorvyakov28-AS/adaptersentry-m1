@@ -35,3 +35,9 @@ Thumbs.db
 benchmarks/results/current.json
 benchmarks/results/*.tmp.json
 
+
+# Internal notes and tooling — never published (OPSEC). Previously protected
+# only by the local .git/info/exclude, which a fresh clone does not have.
+.planning/
+docs/internal/
+scripts/
