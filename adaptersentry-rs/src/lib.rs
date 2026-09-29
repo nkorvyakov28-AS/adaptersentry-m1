@@ -10,7 +10,7 @@
 //!   sign_stats           — sign_entropy + sign_balance in one pass
 //!   isolation_score_1d   — ECDF-based anomaly score; O(n log n) IF replacement
 
-use numpy::{PyReadonlyArray1, PyReadonlyArray2};
+use numpy::PyReadonlyArray1;
 use pyo3::prelude::*;
 
 // ── Harmonic number H(n) ────────────────────────────────────────────────────
@@ -87,9 +87,14 @@ fn tensor_stats_f32(
     let skew = if m2 > 1e-30 { m3 / m2.powf(1.5) } else { 0.0 };
     let zero_ratio = zero_count as f64 / n as f64;
 
-    // Sort once for all order statistics
-    let mut sorted: Vec<f32> = data.to_vec();
-    py.allow_threads(|| sorted.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)));
+    // Sort once for all order statistics. Only finite values are ordered:
+    // NaN has no position, and a comparator that is not a total order may
+    // make sort_unstable_by panic (Rust >= 1.81), killing the whole batch.
+    let mut sorted: Vec<f32> = data.iter().copied().filter(|v| v.is_finite()).collect();
+    py.allow_threads(|| sorted.sort_unstable_by(f32::total_cmp));
+    if sorted.is_empty() {
+        return Ok((kurt, skew, mean, std, f64::NAN, f64::NAN, f64::NAN, f64::NAN, zero_ratio));
+    }
 
     let median = quantile_sorted(&sorted, 0.5);
     let p01 = quantile_sorted(&sorted, 0.01);
@@ -101,13 +106,17 @@ fn tensor_stats_f32(
     Ok((kurt, skew, mean, std, median, p01, p99, iqr, zero_ratio))
 }
 
-/// Linear interpolation quantile on an already-sorted slice.
+/// Linear interpolation quantile on an already-sorted, non-empty slice.
+///
+/// `q` is clamped to [0, 1]; a NaN `q` is treated as 0. This keeps the index
+/// inside the slice for any caller-supplied percentile.
 #[inline]
 fn quantile_sorted(sorted: &[f32], q: f64) -> f64 {
     let n = sorted.len();
     if n == 1 {
         return sorted[0] as f64;
     }
+    let q = if q.is_nan() { 0.0 } else { q.clamp(0.0, 1.0) };
     let idx = q * (n - 1) as f64;
     let lo = idx.floor() as usize;
     let hi = (lo + 1).min(n - 1);
@@ -128,11 +137,11 @@ fn percentiles_f32(
     qs: Vec<f64>,
 ) -> PyResult<Vec<f64>> {
     let data = x.as_slice()?;
-    if data.is_empty() {
+    let mut sorted: Vec<f32> = data.iter().copied().filter(|v| v.is_finite()).collect();
+    if sorted.is_empty() {
         return Ok(vec![0.0; qs.len()]);
     }
-    let mut sorted: Vec<f32> = data.to_vec();
-    py.allow_threads(|| sorted.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)));
+    py.allow_threads(|| sorted.sort_unstable_by(f32::total_cmp));
     Ok(qs.iter().map(|&q| quantile_sorted(&sorted, q / 100.0)).collect())
 }
 
@@ -242,10 +251,9 @@ fn isolation_score_1d(
 
     // Sort to get ranks
     let mut indexed: Vec<(usize, f32)> = data.iter().copied().enumerate().collect();
+    // total_cmp is a total order (NaN included), so the sort cannot panic.
     py.allow_threads(|| {
-        indexed.sort_unstable_by(|a, b| {
-            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        indexed.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
     });
 
     // For each point, compute expected path length via harmonic numbers
@@ -277,4 +285,27 @@ fn adaptersentry_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sign_stats, m)?)?;
     m.add_function(wrap_pyfunction!(isolation_score_1d, m)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quantile_sorted;
+
+    #[test]
+    fn quantile_clamps_out_of_range_q() {
+        let s = [1.0_f32, 2.0, 3.0];
+        assert_eq!(quantile_sorted(&s, 5.0), 3.0);
+        assert_eq!(quantile_sorted(&s, -1.0), 1.0);
+        assert_eq!(quantile_sorted(&s, f64::NAN), 1.0);
+    }
+
+    #[test]
+    fn total_cmp_sort_with_nan_does_not_panic() {
+        let mut v: Vec<f32> = (0..10_000)
+            .map(|i| if i % 7 == 0 { f32::NAN } else { (i as f32).sin() })
+            .collect();
+        v.sort_unstable_by(f32::total_cmp);
+        let finite: Vec<f32> = v.iter().copied().filter(|x| x.is_finite()).collect();
+        assert!(finite.windows(2).all(|w| w[0] <= w[1]));
+    }
 }

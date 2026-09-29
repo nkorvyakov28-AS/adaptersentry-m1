@@ -35,5 +35,3 @@ Thumbs.db
 benchmarks/results/current.json
 benchmarks/results/*.tmp.json
 
-# Rust library crate — Cargo.lock not tracked for library crates (cdylib)
-adaptersentry-rs/Cargo.lock
