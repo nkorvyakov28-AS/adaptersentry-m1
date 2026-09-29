@@ -97,13 +97,13 @@ Policy-level decision. This is what CI gates and enforcement policies should rea
 
 | Field | Description |
 |-------|-------------|
-| `recommended_action` | `allow` / `review` / `block` — what automated enforcement should do |
-| `m2_recommended` | `true` when M2 behavioral sandbox is recommended (score ≥ 14 or missing metadata) |
+| `recommended_action` | `allow` / `review` / `block` — what automated enforcement should do. Derived from the ensemble level (LOW → allow, MEDIUM → review, HIGH/CRITICAL → block), then escalated to at least `review` when `status` is `degraded` or `failed` (fail-closed) |
+| `m2_recommended` | `true` when M2 behavioral sandbox is recommended: HIGH/CRITICAL, missing metadata, or degraded/failed parsing |
 | `overall_score` | Additive rule-based score 0–100 |
 | `overall_level` | `LOW` / `MEDIUM` / `HIGH` / `CRITICAL` |
 | `false_positive_suppressed` | Init-artifact flags suppressed (INIT_ONLY adapters) |
 | `training_status` | `TRAINED` / `INIT_ONLY` / `PARTIALLY_TRAINED` / `UNKNOWN` |
-| `policy_signals` | Non-statistical signals (missing metadata, degraded parse) |
+| `policy_signals` | Non-statistical signals (`FeatureSignal`, family `policy`): `PARSE_FAILED`, `DEGRADED_PARSE`, `MISSING_METADATA` |
 
 ## EnsembleSignal
 

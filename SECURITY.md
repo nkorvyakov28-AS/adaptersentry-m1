@@ -3,21 +3,41 @@
 ## Security Model — M1 Static Analyzer
 
 AdapterSentry M1 operates in **read-only / parse-only mode** on untrusted `.safetensors` files.
-The following properties hold for all M1 code paths:
+The following properties hold for the scan path (`adaptersentry scan`, `adaptersentry batch`,
+`scan()`, `scan_to_result()`):
 
 - M1 does not run inference, load a base model, or execute any model code.
-- No tensor operation depends on untrusted file content as executable code.
-- All file paths provided by the caller are resolved through `pathlib.Path.resolve()`
-  before use, preventing path traversal.
-- Tensors exceeding 1 billion elements are rejected before allocation (tensor bomb guard).
-  The check runs on the header-declared shape before any memory is allocated.
-- Adapter metadata is read as plain strings. Metadata nesting depth is capped at 5 levels;
-  payloads exceeding the limit are flagged as a security signal and not processed further.
-- `eval()`, `exec()`, and `pickle.load()` are never called on untrusted content.
-- The `safetensors` library provides safe, header-validated tensor parsing;
-  raw pickle and PyTorch checkpoint formats (`.pt`, `.bin`) are explicitly rejected.
-- Workers validate that adapter paths are absolute before processing, enforcing the
-  trust boundary between the orchestrator and worker pool.
+  `eval()`, `exec()` and `pickle` are never used on adapter content.
+- Only `.safetensors` is parsed. Pickle-based formats (`.bin`, `.pt`) are never deserialised;
+  such files fail the scan.
+- **Files.** The path is resolved with `pathlib.Path.resolve()` and must be a regular file
+  (no FIFOs or devices, including through symlinks) with a `.safetensors` suffix after
+  resolution and a size of at most 64 GiB. Batch discovery skips non-regular files.
+- **Header.** The declared JSON header length is bounded (100 MB) and checked against the
+  file size before it is read.
+- **Tensors.** Before any tensor is allocated, its header entry is validated: dtype must be
+  F32, F16 or BF16; shape, byte length and offsets must be consistent; a single tensor may
+  not exceed 1 billion elements, all LoRA tensors together may not exceed 3 billion, and the
+  LoRA rank may not exceed 1024. Each tensor is loaded in its own error scope.
+- **Fail-closed verdict.** A tensor that fails validation or loading, a tensor that is not
+  part of a `lora_A`/`lora_B` pair (and is therefore not analysed), or a layer with NaN/Inf
+  weights makes the scan `DEGRADED`. A file that cannot be parsed makes it `FAILED`. Neither
+  ever yields `recommended_action: "allow"`: the action is at least `review`, with
+  `m2_recommended: true` and a `PARSE_FAILED` or `DEGRADED_PARSE` policy signal.
+  A low score on a degraded scan is not evidence that the adapter is safe.
+- **Output.** Tensor names, paths and messages are escaped before they are printed as text,
+  so control or bidi characters in an adapter cannot forge terminal output. JSON and SARIF
+  are produced with standard JSON escaping.
+- The Rust extension (optional) orders floats with a total order and cannot panic on NaN.
+- Workers validate that adapter paths are absolute before processing, enforcing the trust
+  boundary between the orchestrator and the worker pool.
+
+Operational notes:
+
+- `--ray-address` connects to an existing Ray cluster, which has no authentication by
+  default. Use it only on localhost or a trusted private network.
+- JSON and SARIF reports contain the absolute path of the scanned file. Review them before
+  attaching them to a public issue.
 
 The behavioral sandbox (M2), signature engine (M3), and runtime monitor (M4) are not yet
 implemented. Their security models will be documented when those components ship.
@@ -35,7 +55,7 @@ report it so it can be investigated and disclosed responsibly.
    email `security@adaptersentry.io`.
 2. Include:
    - The HuggingFace repository ID (e.g., `author/model-name`)
-   - The M1 scan report:
+   - The M1 scan report (it contains the local file path; redact it if needed):
      ```
      adaptersentry scan ./adapter.safetensors --format summary-json --output report.json
      ```
@@ -85,9 +105,7 @@ We will communicate status updates if a deadline cannot be met.
 
 | Version | Supported |
 |---|---|
-| v1.0.2 (current) | ✅ Yes |
-| v1.0.1 | ✅ Yes |
-| v1.0.0 | ❌ No |
-| v0.x.x | ❌ No |
+| v1.0.3 (current) | ✅ Yes |
+| v1.0.2 and earlier | ❌ No — can report `allow` for a file it failed to parse; upgrade |
 
-Only the two most recent releases receive security patches.
+Security fixes are released for the most recent version.

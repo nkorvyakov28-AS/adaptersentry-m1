@@ -299,6 +299,12 @@ remain at init — consistent with targeted-layer injection.
 | HIGH | 14–35 | Multiple independent detectors agree. Manual inspection required. |
 | CRITICAL | 36–100 | Strong multi-signal evidence. Do not load without thorough review. |
 
+**Fail-closed.** `recommended_action` is `allow` only when the whole adapter was parsed and
+analysed. If any tensor could not be read, was not part of a `lora_A`/`lora_B` pair, or held
+NaN/Inf values, the scan is `DEGRADED`; if the file could not be parsed, it is `FAILED`.
+Both yield at least `review` with `m2_recommended: true`. A low score on a degraded scan is
+not evidence that the adapter is safe.
+
 ---
 
 ## Benchmark Results

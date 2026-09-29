@@ -254,7 +254,7 @@ These invariants are non-negotiable. Any PR that violates them will not be merge
 
 - Never call `eval()`, `exec()`, or `pickle.loads()` on adapter-controlled input.
 - Validate all file paths with `Path.resolve()` before opening them.
-- Reject tensors with more than 1 billion elements before allocation (tensor bomb guard).
+- Validate every tensor from the header before allocation: dtype (F32/F16/BF16), shape and byte length, at most 1 billion elements per tensor and 3 billion in total, LoRA rank ≤ 1024 (tensor bomb guard). Skipped tensors must surface as `TENSOR_NOT_ANALYZED`, never be ignored.
 - Do not load base model weights in M1. The analyzer is read-only on the adapter file only.
 - Do not add inference or execution behaviour to static-analysis code paths.
 - Missing or malformed metadata is a security signal, not a cosmetic issue — surface it

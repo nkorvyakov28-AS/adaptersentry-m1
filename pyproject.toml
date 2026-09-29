@@ -33,11 +33,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/nkorvyakov28-AS/adaptersentry"
-Documentation = "https://github.com/nkorvyakov28-AS/adaptersentry/tree/main/docs"
-Repository = "https://github.com/nkorvyakov28-AS/adaptersentry"
-"Bug Tracker" = "https://github.com/nkorvyakov28-AS/adaptersentry/issues"
-Changelog = "https://github.com/nkorvyakov28-AS/adaptersentry/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/nkorvyakov28-AS/adaptersentry-m1"
+Documentation = "https://github.com/nkorvyakov28-AS/adaptersentry-m1/tree/main/docs"
+Repository = "https://github.com/nkorvyakov28-AS/adaptersentry-m1"
+"Bug Tracker" = "https://github.com/nkorvyakov28-AS/adaptersentry-m1/issues"
+Changelog = "https://github.com/nkorvyakov28-AS/adaptersentry-m1/blob/main/CHANGELOG.md"
 
 [project.scripts]
 adaptersentry       = "adaptersentry.cli.main:main"

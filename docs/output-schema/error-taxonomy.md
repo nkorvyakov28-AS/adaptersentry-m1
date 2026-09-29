@@ -86,6 +86,13 @@ trigger analysis failures to evade detection.
 | `TENSOR_TOO_LARGE` | Possible tensor bomb / resource exhaustion |
 | `NO_LORA_PAIRS` | Mislabelled adapter (non-LoRA published as LoRA) |
 | `PARTIAL_LAYER_ANALYSIS` | Selective layer corruption to hide anomalies |
+| `TENSOR_NOT_ANALYZED` | A tensor was skipped (unsupported dtype, failed header validation or load, or not part of a `lora_A`/`lora_B` pair). The payload may live in what was not analysed |
+| `INVALID_SAFETENSORS` | The file could not be parsed (bounded header, regular-file and structure checks). Scan is `FAILED`; verdict is at least `review` |
+
+Layers whose weights contain NaN or Inf are excluded from analysis and carry the
+`NON_FINITE_WEIGHTS` flag; the scan is `DEGRADED`.
+
+Since v1.0.3 a `degraded` or `failed` scan never produces `recommended_action: "allow"`.
 
 ---
 
