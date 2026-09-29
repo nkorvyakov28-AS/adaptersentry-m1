@@ -26,7 +26,8 @@ loaded into memory (~3.3 GB for a 70B adapter).
 - **adapter_config.json**: effective scale α/r or α/√r (rsLoRA), rank/alpha patterns (literal
   only — regexes from the file are never compiled), declared vs actual rank and modules.
 - **Streaming**: one LoRA pair in memory at a time. A 70B-shaped adapter (560 modules, r=64,
-  1.66 GB) takes ~15 s and +93 MB, versus +3.3 GB to load it in 1.x.
+  1.66 GB) scans in ~18–20 s end to end (`adaptersentry scan`, 8-CPU server) with a peak
+  process RSS of ~160 MB; loading the same file took +3.3 GB in 1.x.
 - **Intra-adapter comparison**: robust z-scores of each module against its family after
   removing the depth trend (Theil–Sen); needs no reference data; families of ≥ 16 modules.
 - **Structural findings**: full `lm_head` / embedding / router matrices shipped in the adapter,
@@ -46,7 +47,11 @@ loaded into memory (~3.3 GB for a 70B adapter).
   `--fail-on review|block` compares the verdict action.
 - SARIF: layer/module logical locations, relative artifact URI with SHA-256, and a result for
   any non-`allow` verdict.
-- CLI and workers run BLAS single-threaded (faster for many small matrices).
+- CLI and workers run BLAS single-threaded (faster for many small matrices). `import
+  adaptersentry` no longer imports numpy, so the setting takes effect before numpy loads.
+- `adapter_config.json` and sibling files are looked up next to the path as given, not next
+  to a symlink target (Hugging Face cache: the config sits in `snapshots/<rev>/`, the
+  weights in `blobs/`).
 
 ### Removed
 

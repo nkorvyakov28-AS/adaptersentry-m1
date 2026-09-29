@@ -128,8 +128,9 @@ rate of a block would be unknown.
 ### Performance
 
 Measured on an 8-CPU server with a synthetic Llama-3.3-70B-shaped adapter
-(80 layers × 7 modules, r = 64, 1.66 GB bf16): full analysis in **~15 s**, peak memory
-**+93 MB**. The 1.x engine needed ~3.3 GB just to load the same file.
+(80 layers × 7 modules, r = 64, 1.66 GB bf16): `adaptersentry scan` end to end in
+**~18–20 s**, peak process memory **~160 MB** (Python and numpy included). The 1.x engine
+needed ~3.3 GB just to load the same file.
 
 ---
 

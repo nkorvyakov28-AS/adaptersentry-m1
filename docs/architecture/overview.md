@@ -55,8 +55,9 @@ planned; the result schema already has a place for them (`anomaly.reference`).
 ## Memory and speed
 
 The scan holds one LoRA pair in memory at a time. On a synthetic Llama-3.3-70B-shaped adapter
-(560 modules, r = 64, 1.66 GB bf16) a full scan took about 15 s with about +93 MB peak RSS
-on an 8-CPU machine; streaming the file costs about +32 MB, versus about 3.3 GB to load the
+(560 modules, r = 64, 1.66 GB bf16) `adaptersentry scan` took about 18–20 s end to end (about 17 s of analysis, 1.5 s of
+hashing) with a peak process RSS of about 160 MB on an 8-CPU machine; streaming the file
+costs about +32 MB, versus about 3.3 GB to load the
 same file with the 1.x loader.
 
 ## Security invariants
