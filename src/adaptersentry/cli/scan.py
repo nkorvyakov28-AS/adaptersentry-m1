@@ -236,6 +236,7 @@ def run(args: Any) -> int:
     from adaptersentry.reporters import json as json_reporter
     from adaptersentry.reporters import sarif as sarif_reporter
     from adaptersentry.reporters import text as text_reporter
+    from adaptersentry.reporting.sanitize import safe_text
     from adaptersentry.schemas.adapter_report import ParseStatus
 
     logger = logging.getLogger("adaptersentry.cli.scan")
@@ -245,7 +246,7 @@ def run(args: Any) -> int:
         report = scan(args.adapter, claimed_rank=args.rank, fast=fast)
     except Exception as exc:  # noqa: BLE001
         logger.debug("Unexpected analysis error", exc_info=True)
-        print(f"error: analysis failed: {exc}", file=sys.stderr)
+        print(f"error: analysis failed: {safe_text(exc)}", file=sys.stderr)
         return 1
 
     fmt = args.fmt

@@ -6,6 +6,7 @@ Degraded and malformed states are prominently shown.
 
 from __future__ import annotations
 
+from adaptersentry.reporting.sanitize import safe_text
 from adaptersentry.schemas.adapter_report import AdapterReport, AnalysisMode, ParseStatus
 from adaptersentry.schemas.errors import ErrorCategory
 from adaptersentry.schemas.finding import Severity
@@ -60,7 +61,7 @@ def render(report: AdapterReport, no_color: bool = False) -> str:
         + _colour(ps_tag, ps_colour, no_color)
     )
     lines.append("=" * 60)
-    lines.append(f"Target:   {report.scan_target.path}")
+    lines.append(f"Target:   {safe_text(report.scan_target.path)}")
     if report.scan_target.file_size_bytes is not None:
         size_mb = report.scan_target.file_size_bytes / (1024 * 1024)
         lines.append(f"Size:     {size_mb:.1f} MB")
@@ -117,9 +118,10 @@ def render(report: AdapterReport, no_color: bool = False) -> str:
             sev = _colour(f"[{finding.severity.value:8s}]", col, no_color)
             layer_hint = ""
             if finding.affected_layers:
-                layer_hint = f"  ({', '.join(finding.affected_layers[:2])}{'…' if len(finding.affected_layers) > 2 else ''})"
+                shown = ", ".join(safe_text(name) for name in finding.affected_layers[:2])
+                layer_hint = f"  ({shown}{'…' if len(finding.affected_layers) > 2 else ''})"
             lines.append(f"  {sev}  {finding.rule_id}{layer_hint}")
-            lines.append(_colour(f"             {finding.title}", _DIM, no_color))
+            lines.append(_colour(f"             {safe_text(finding.title)}", _DIM, no_color))
     else:
         lines.append("")
         lines.append(_colour("No findings.", _GREEN, no_color))
@@ -156,7 +158,8 @@ def render(report: AdapterReport, no_color: bool = False) -> str:
         )
         for i, tr in enumerate(ranked[:10], 1):
             nf = tr.norm_features  # type: ignore[union-attr]
-            short = tr.layer_name.split(".")[-3] if "." in tr.layer_name else tr.layer_name
+            name = safe_text(tr.layer_name)
+            short = name.split(".")[-3] if "." in name else name
             lines.append(
                 f"  {i:2d}. {short:<28s}"
                 f"  ratio={nf.delta_norm_ratio:.4f}"

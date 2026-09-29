@@ -155,7 +155,7 @@ def _run_analysis(
         tensor_B = pair.get("B")
 
         if tensor_A is None or tensor_B is None:
-            logger.debug("Skipping incomplete pair for layer: %s", layer_name)
+            logger.debug("Skipping incomplete pair for layer: %r", layer_name)
             continue
 
         # Non-finite weights silently disable every threshold (NaN comparisons are

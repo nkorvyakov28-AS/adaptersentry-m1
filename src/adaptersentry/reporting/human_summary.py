@@ -20,6 +20,7 @@ identifiers appear in the VERDICT/SIGNALS/BREAKDOWN blocks.
 
 from __future__ import annotations
 
+from adaptersentry.reporting.sanitize import safe_text
 from adaptersentry.schemas.adapter_report import AdapterReport, AnalysisMode, ParseStatus
 from adaptersentry.schemas.finding import Severity
 
@@ -52,7 +53,8 @@ def _severity_colour(sev: Severity, no_color: bool) -> str:
 
 
 def _shorten_layer(layer_name: str, width: int = 40) -> str:
-    """Return a short representation of a layer path for display."""
+    """Return a short, terminal-safe representation of a layer path for display."""
+    layer_name = safe_text(layer_name)
     parts = layer_name.split(".")
     if len(parts) <= 3:
         return layer_name
@@ -125,7 +127,7 @@ def render_human_summary(
     )
     lines.append("=" * 60)
 
-    path_str = report.scan_target.path
+    path_str = safe_text(report.scan_target.path)
     size_str = ""
     if report.scan_target.file_size_bytes is not None:
         size_str = f"  ({report.scan_target.file_size_bytes / (1024*1024):.1f} MB)"
@@ -190,7 +192,7 @@ def render_human_summary(
         for ss in top3:
             score_col = _RED if ss.normalized_score > 0.6 else _YELLOW if ss.normalized_score > 0.3 else ""
             score_str = _c(f"{ss.normalized_score:.2f}", score_col, no_color)
-            reason = f"  ·  {ss.top_reasons[0]}" if ss.top_reasons else ""
+            reason = f"  ·  {safe_text(ss.top_reasons[0])}" if ss.top_reasons else ""
             lines.append(f"  {ss.family:<16s} {score_str}{reason}")
 
     # ── Findings (compact) ────────────────────────────────────────────────────
@@ -237,7 +239,7 @@ def _render_score_breakdown(lines: list[str], sb, no_color: bool) -> None:
     for ss in sb.sub_scores:
         score_col = _RED if ss.normalized_score > 0.6 else _YELLOW if ss.normalized_score > 0.3 else _GREEN
         score_str = _c(f"{ss.normalized_score:.3f}", score_col, no_color)
-        reason = f"  ·  {ss.top_reasons[0]}" if ss.top_reasons else ""
+        reason = f"  ·  {safe_text(ss.top_reasons[0])}" if ss.top_reasons else ""
         cap_flag = _c(" [cap]", _YELLOW, no_color) if ss.cap_applied else ""
         floor_flag = _c(" [floor]", _CYAN, no_color) if ss.floor_applied else ""
         lines.append(
@@ -265,7 +267,7 @@ def _render_per_layer_findings(lines: list[str], plf: list, no_color: bool) -> N
         families = ", ".join(finding.triggered_families)
         lines.append(f"  #{finding.rank}  {short:<40s}  {sev_str}  {families}")
         if finding.signals:
-            signal_line = "  ·  " + "  ·  ".join(finding.signals[:3])
+            signal_line = "  ·  " + "  ·  ".join(safe_text(s) for s in finding.signals[:3])
             lines.append(_c(f"       {signal_line}", _DIM, no_color))
 
 
