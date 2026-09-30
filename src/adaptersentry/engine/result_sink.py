@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from adaptersentry.engine.schemas.scan_result import ScanResult, DebugReport
+    from adaptersentry.schemas.result import ScanResult
     from adaptersentry.engine.cache import CacheStore
     from adaptersentry.engine.manifest import ManifestDB
 
@@ -48,12 +48,12 @@ def _stable_content_hash(result: "ScanResult") -> str:
     RESULT CONFLICT warnings when the same adapter is re-scanned with
     identical analysis output (e.g. --resume, --force-rescan).
 
-    Excluded from hash: identity.started_at, identity.completed_at,
-    identity.wall_time_ms — all timing-volatile, not part of the analysis.
+    Excluded from hash: scan.started_at, scan.completed_at,
+    scan.wall_time_ms — all timing-volatile, not part of the analysis.
     """
     import json as _json
     d = result.model_dump(
-        exclude={"identity": {"started_at", "completed_at", "wall_time_ms"}}
+        mode="json", exclude={"scan": {"started_at", "completed_at", "wall_time_ms"}}
     )
     return _sha256_bytes(_json.dumps(d, sort_keys=True, default=str).encode())
 
@@ -81,7 +81,7 @@ class ResultSink:
 
     Usage:
         with ResultSink(results_dir, run_jsonl) as sink:
-            sink.write(result, debug, manifest_db, cache_store)
+            sink.write(result, manifest_db, cache_store, request_id)
     """
 
     def __init__(self, results_dir: Path, run_jsonl_path: Path) -> None:
@@ -93,24 +93,19 @@ class ResultSink:
     def write(
         self,
         result: "ScanResult",
-        debug: "DebugReport | None",
         manifest_db: "ManifestDB",
         cache_store: "CacheStore | None",
         request_id: str,
-        *,
-        write_debug: bool = False,
     ) -> None:
         """Persist result; update cache and manifest on success.
 
         Args:
-            result:      Public ScanResult (summary-json contract).
-            debug:       Optional DebugReport (debug-json; None = not written).
+            result:      ScanResult 2.0.0.
             manifest_db: Manifest to update on completion.
             cache_store: Cache store to write the entry (None = cache disabled).
             request_id:  Manifest row to update.
-            write_debug: If True, write debug JSON alongside the summary JSON.
         """
-        scan_id = result.identity.scan_id
+        scan_id = result.scan.scan_id.removeprefix("sha256:")
         result_bytes = result.model_dump_json(indent=2).encode()
         # Use stable hash (excludes timing fields) for idempotency comparison.
         # started_at / completed_at / wall_time_ms vary between identical scans;
@@ -124,8 +119,8 @@ class ResultSink:
             import json as _json
             try:
                 existing = _json.loads(result_path.read_bytes())
-                from adaptersentry.engine.schemas.scan_result import ScanResult as _SR
-                existing_result = _SR.model_validate(existing)
+                from adaptersentry.schemas.result import load_scan_result
+                existing_result = load_scan_result(existing)
                 existing_stable_hash = _stable_content_hash(existing_result)
             except Exception:
                 existing_stable_hash = None
@@ -148,21 +143,15 @@ class ResultSink:
         with self._jsonl_path.open("a", encoding="utf-8") as f:
             f.write(result.model_dump_json() + "\n")
 
-        # Write debug JSON if requested
-        if write_debug and debug is not None:
-            debug_path = self._results_dir / f"{scan_id}.debug.json"
-            _atomic_write(debug_path, debug.model_dump_json(indent=2).encode())
-
         # Write cache entry
-        if cache_store is not None:
+        if cache_store is not None and result.artifact is not None:
             try:
                 from adaptersentry.version import __version__
-                from adaptersentry.engine.config import get_default_config
                 cache_store.write(
                     result_bytes=result_bytes,
                     content_hash=result.artifact.content_hash,
-                    analyzer_config_hash=result.identity.analyzer_config_hash,
-                    scan_id=scan_id,
+                    analyzer_config_hash=result.scan.config_hash,
+                    scan_id=result.scan.scan_id,
                     schema_version=result.schema_version,
                     writer_version=__version__,
                 )

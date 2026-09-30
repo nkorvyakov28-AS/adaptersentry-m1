@@ -1,6 +1,7 @@
 """CombinedReport — M1 + M2 unified verdict.
 
-schema_version = "1.0.0" — public stable contract.
+schema_version = "2.0.0" — embeds ScanResult 2.0.0 (m1). BehavioralResult /
+ProbeResult keep their own 1.0.0 wire format.
 
 M1-only scans populate the m1 field only; the m2 field defaults to
 BehavioralResult(status='not_run'). Consumers MUST check
@@ -13,7 +14,7 @@ is a stable wire format that those implementations populate.
 CombinedReport.final_verdict is the authoritative signal for enforcement:
   'allow'  — M1 low-risk AND (M2 not triggered OR M2 cleared)
   'review' — any MEDIUM signal or M2 inconclusive
-  'block'  — M1 HIGH/CRITICAL OR M2 confirmed
+  'block'  — M1 verdict block OR M2 confirmed
 """
 
 from __future__ import annotations
@@ -22,8 +23,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from adaptersentry.engine.schemas.identity import AdapterArtifactIdentity
-from adaptersentry.engine.schemas.scan_result import ScanResult
+from adaptersentry.schemas.result import Artifact, ScanResult
 
 
 ProbeVerdictLiteral = Literal["confirmed", "cleared", "inconclusive", "skipped", "error"]
@@ -110,16 +110,16 @@ class PolicyGateResult(BaseModel):
 class CombinedReport(BaseModel):
     """Unified report merging M1 static + M2 behavioral results.
 
-    schema_version = "1.0.0".
+    schema_version = "2.0.0".
     M1-only scans: m2 remains at BehavioralResult(status='not_run').
     final_verdict is derived from both M1 verdict and M2 result.
     """
 
     model_config = ConfigDict(frozen=True, extra="ignore")
 
-    schema_version: str = "1.0.0"
-    report_id: str = Field(description="sha256(m1.identity.scan_id + ':combined').")
-    artifact: AdapterArtifactIdentity
+    schema_version: str = "2.0.0"
+    report_id: str = Field(description="sha256(m1.scan.scan_id + ':combined').")
+    artifact: Artifact | None
     m1: ScanResult
     policy_gate: PolicyGateResult = Field(default_factory=PolicyGateResult)
     m2: BehavioralResult = Field(default_factory=BehavioralResult)
@@ -132,13 +132,13 @@ class CombinedReport(BaseModel):
         import hashlib
 
         report_id = "sha256:" + hashlib.sha256(
-            (m1.identity.scan_id + ":combined").encode()
+            (m1.scan.scan_id + ":combined").encode()
         ).hexdigest()
 
         gate = PolicyGateResult(
             m2_triggered=m1.verdict.m2_recommended,
             trigger_reason=(
-                f"verdict.m2_recommended=True (score={m1.verdict.overall_score})"
+                f"verdict.m2_recommended=True (action={m1.verdict.action}, level={m1.verdict.level.value})"
                 if m1.verdict.m2_recommended else None
             ),
         )
@@ -149,6 +149,6 @@ class CombinedReport(BaseModel):
             m1=m1,
             policy_gate=gate,
             m2=BehavioralResult(),
-            final_verdict=m1.verdict.recommended_action,
+            final_verdict=m1.verdict.action,
             generated_at=generated_at,
         )

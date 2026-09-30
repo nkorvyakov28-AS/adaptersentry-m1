@@ -102,13 +102,15 @@ class TestGenerateCorpus:
         assert out.exists()
 
     def test_m1_analyzer_can_scan_generated_adapter(self, tmp_path) -> None:
-        from adaptersentry.analyzer import scan
-        from adaptersentry.schemas.adapter_report import ParseStatus
+        from adaptersentry.scanner import scan
 
         paths = generate_corpus(1, tmp_path / "corpus", rank=8, n_layers=2, n_modules=2)
-        report = scan(paths[0])
-        assert report.parse_status != ParseStatus.FAILED
-        assert len(report.tensor_records) > 0
+        result = scan(paths[0])
+        assert result.status != "failed"
+        assert result.coverage.n_modules == 4
+        assert result.coverage.n_modules_analyzed > 0
+        assert result.adapter.rank_actual is not None
+        assert result.adapter.rank_actual.max == 8
 
 
 # ---------------------------------------------------------------------------
@@ -199,27 +201,33 @@ class TestBenchmarkMetricsDoD:
 class TestCollectLatencies:
     def test_reads_wall_time_ms_from_json_files(self, tmp_path) -> None:
         result_data = {
-            "schema_version": "1.0.0",
-            "identity": {"wall_time_ms": 1500},
+            "schema_version": "2.0.0",
+            "scan": {"wall_time_ms": 1500},
             "status": "ok",
         }
         (tmp_path / "adapter_0000.json").write_text(json.dumps(result_data))
         (tmp_path / "adapter_0001.json").write_text(json.dumps(
-            {**result_data, "identity": {"wall_time_ms": 2000}}
+            {**result_data, "scan": {"wall_time_ms": 2000}}
         ))
         latencies = _collect_latencies(tmp_path)
         assert sorted(latencies) == [1500.0, 2000.0]
 
     def test_skips_debug_json_files(self, tmp_path) -> None:
         (tmp_path / "adapter_0000.debug.json").write_text(
-            json.dumps({"identity": {"wall_time_ms": 999}})
+            json.dumps({"scan": {"wall_time_ms": 999}})
         )
         latencies = _collect_latencies(tmp_path)
         assert latencies == []
 
+    def test_ignores_legacy_identity_timing(self, tmp_path) -> None:
+        (tmp_path / "adapter_0000.json").write_text(
+            json.dumps({"schema_version": "1.0.0", "identity": {"wall_time_ms": 999}})
+        )
+        assert _collect_latencies(tmp_path) == []
+
     def test_skips_run_summary(self, tmp_path) -> None:
         (tmp_path / "run_summary.json").write_text(
-            json.dumps({"identity": {"wall_time_ms": 999}})
+            json.dumps({"scan": {"wall_time_ms": 999}})
         )
         latencies = _collect_latencies(tmp_path)
         assert latencies == []

@@ -71,6 +71,10 @@ class AdapterScanRequest(BaseModel):
         default="full",
         description="Scan depth: 'full' (all detectors) or 'fast' (optimised for throughput).",
     )
+    policy: Literal["default", "strict"] = Field(
+        default="default",
+        description="Verdict policy: 'strict' blocks on structural red flags.",
+    )
     force_rescan: bool = False
     enabled_families: list[str] = Field(
         default_factory=lambda: ["norm", "distribution", "entropy", "outlier", "spectral"],

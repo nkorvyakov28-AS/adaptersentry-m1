@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 
 
@@ -22,9 +23,10 @@ def _build_root_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  adaptersentry scan adapter.safetensors\n"
-            "  adaptersentry scan adapter.safetensors --format json --output report.json\n"
-            "  adaptersentry scan adapter.safetensors --format sarif --fail-on HIGH\n"
+            "  adaptersentry scan adapter_model.safetensors\n"
+            "  adaptersentry scan adapter_model.safetensors --format json --output report.json\n"
+            "  adaptersentry scan adapter_model.safetensors --format sarif --fail-on review\n"
+            "  adaptersentry batch --input-dir adapters/ --workers 8 --fail-on review\n"
             "  adaptersentry --version\n"
         ),
     )
@@ -43,6 +45,10 @@ def _build_root_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     """Primary entry point for ``adaptersentry`` and ``python -m adaptersentry``."""
+    # The analysis multiplies many small matrices; multithreaded BLAS only adds
+    # overhead there (measured 2x slower on a 70B adapter). Must precede numpy import.
+    for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+        os.environ.setdefault(var, "1")
     from adaptersentry.cli.scan import build_parser as build_scan_parser, run as run_scan
     from adaptersentry.cli.batch import build_parser as build_batch_parser, run as run_batch
 

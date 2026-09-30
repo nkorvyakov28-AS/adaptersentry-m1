@@ -1,451 +1,190 @@
 # AdapterSentry
 
-![Tests](https://img.shields.io/badge/tests-773%20passing-brightgreen)
 ![Python](https://img.shields.io/badge/python-%3E%3D3.11-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-stable-brightgreen)
-![Version](https://img.shields.io/badge/version-1.0.3-blue)
+![Version](https://img.shields.io/badge/version-2.0.0-blue)
 
 AdapterSentry is a static security scanner for LoRA adapters distributed as `.safetensors`
-files. Anyone can publish an adapter to HuggingFace Hub; a malicious adapter can inject
-backdoors, suppress safety alignment, or redirect model behaviour — all without touching the
-base model weights. AdapterSentry inspects the adapter weight tensors directly, before the
-adapter is loaded into any model.
+files. A LoRA adapter is a small file that changes how a large language model behaves; anyone
+can publish one, and a poisoned adapter can carry a backdoor that stays silent until a trigger
+appears in the input. AdapterSentry inspects the adapter's weights **before** the adapter is
+loaded, without running the model and without knowing the trigger.
 
-**v1.0.3** is a security release: a file the scanner cannot fully parse is no longer
-reported as `allow`, and adapter files are validated before any tensor is allocated.
-Upgrade from any earlier version.
-**v1.0.2** promotes `BehavioralResult` / `ProbeResult` to the v1.0.0 public wire contract
-and adds `scan_to_result(adapter_path)` as a stable public API returning `ScanResult`
-directly (required by downstream sandbox runners). Also adds `ScanPhase.BEHAVIORAL`.
-**v1.0.1** fixes two bugs: `feature_completeness` always 0% in fast mode, and a
-misleading `rule 100/100` display when ensemble is LOW.
-**v1.0.0** — M1 Static Analyzer complete: 69 adapters/min (Ray + Rust), 57× faster than baseline.
-See [docs/architecture/open-core-boundary.md](docs/architecture/open-core-boundary.md).
+**v2.0.0** replaces the analysis engine: exact statistics of the effective update
+ΔW = s·B·A (no sampling, no proxies), streaming analysis that scales to 70B–405B and MoE
+models in tens of megabytes of memory, a comparison of every module with its own family inside
+the adapter, structural findings, and a new result contract (`ScanResult 2.0.0`).
+See [CHANGELOG.md](CHANGELOG.md) and [Migrating from 1.x](#migrating-from-1x).
 
 ---
 
-## Why this matters
+## What it tells you
 
-LoRA adapters are tiny files — typically 10–200 MB — that modify a base model's behaviour
-by adding a low-rank weight delta at every targeted layer. The supply-chain attack surface is
-real: a user who downloads an adapter from Hub applies that delta to their model automatically,
-with no code review and often no sandboxing. Structural anomalies in the weight tensors —
-abnormal kurtosis, near-rank-1 energy concentration, selective layer targeting — are detectable
-without running the model. M1 surfaces these signals and lets you make an informed decision
-before loading.
+```text
+$ adaptersentry scan adapter_model.safetensors
+AdapterSentry 2.0.0 · adapter_model.safetensors
+================================================================
+Verdict:  REVIEW (MEDIUM) · confidence medium · behavioural check recommended
+Status:   ok · policy default · mode full
+Why:
+  - [LOW] NO_REFERENCE_PROFILE: No calibrated reference for this model family; verdict relies on intra-adapter comparison
+  - [MEDIUM] INTRA_OUTLIER: Module departs from its family: down_proj layer 47, robust z = 9.4 (threshold 8.0, uncalibrated)
+Adapter:  peft_lora, family llama (config), 80 layers, r=64 (declared 64), α=128, scaling alpha_over_r, training trained
+Coverage: 560/560 modules analysed; 0 tensor(s) not analysed
+Intra:    max robust z 9.4 · 2 outlier module(s) · energy Gini 0.41
+Findings (1):
+  [MEDIUM] INTRA_DEPTH_SPIKE — Module departs from its family  (layer 47, down_proj)
+```
+*(Illustrative output.)*
+
+The verdict is one of **`allow`**, **`review`** or **`block`**, with the reasons, a confidence
+level and what limits it. CI gates read `verdict.action`.
 
 ---
 
-## Quick Start
-
-### Install
+## Quick start
 
 ```bash
 pip install adaptersentry
 
-# With Ray backend (optional, recommended for large corpora)
-pip install "adaptersentry[ray]"
-
-# With Rust hot-path extensions (optional, requires Rust toolchain — 57× full-mode throughput)
-pip install maturin
-cd adaptersentry-rs && VIRTUAL_ENV=$(python -c "import sys; print(sys.prefix)") maturin develop --release
-
-# Development install from source
-git clone https://github.com/nkorvyakov28-AS/adaptersentry-m1
-cd adaptersentry-m1
-pip install -e ".[dev]"
+adaptersentry scan adapter_model.safetensors                     # text summary
+adaptersentry scan adapter_model.safetensors --format json       # ScanResult 2.0.0
+adaptersentry scan adapter_model.safetensors --format sarif \
+    --output adaptersentry.sarif --fail-on review                # GitHub code scanning + CI gate
+adaptersentry batch --input-dir adapters/ --workers 8 --fail-on review
 ```
-
-### Scan a single adapter
-
-```bash
-# Default: text output with verdict + top signals
-adaptersentry scan adapter.safetensors
-
-# Full breakdown: score decomposition, per-layer findings, analysis quality
-adaptersentry scan adapter.safetensors --verbose
-
-# Stable JSON for CI gate
-adaptersentry scan adapter.safetensors --format summary-json --output report.json
-
-# Fast screening mode (~9× faster, equivalent detection)
-adaptersentry scan adapter.safetensors --mode fast
-
-# SARIF for GitHub code scanning
-adaptersentry scan adapter.safetensors --format sarif --output results.sarif
-
-# Fail CI on HIGH or CRITICAL findings
-adaptersentry scan adapter.safetensors --fail-on HIGH
-
-# Per-layer debug detail
-adaptersentry scan adapter.safetensors --format debug-json
-```
-
-### Scan a directory (batch)
-
-```bash
-# Fast screening — multiprocessing (default)
-adaptersentry batch --input-dir ./adapters --mode fast --workers 8
-
-# Fast screening — Ray backend (better crash isolation, same interface)
-adaptersentry batch --input-dir ./adapters --mode fast --workers 8 --backend ray
-
-# Full audit — Ray, 8 workers (vs 4 max with mp before OOM fix)
-adaptersentry batch --input-dir ./flagged --mode full --workers 8 --backend ray
-
-# Resume after crash
-adaptersentry batch --input-dir ./adapters --run-id my-run --resume
-```
-
-### Python API
 
 ```python
 from pathlib import Path
-from adaptersentry import scan, scan_to_result
-from adaptersentry.scoring.score_breakdown import compute_score_breakdown
-from adaptersentry.scoring.confidence import compute_confidence_score, compute_quality_score
+from adaptersentry import scan
 
-# Full analysis (default) — returns AdapterReport
-report = scan(Path("adapter.safetensors"))
-print(report.risk_summary.risk_level)          # LOW / MEDIUM / HIGH / CRITICAL
-
-# Engine-level ScanResult — returns ScanResult with .identity, .verdict, .artifact
-result = scan_to_result(Path("adapter.safetensors"))
-print(result.verdict.overall_level)            # LOW / MEDIUM / HIGH / CRITICAL
-
-# Score breakdown across 7 feature families
-breakdown = compute_score_breakdown(report)
-for sub in breakdown.sub_scores:
-    print(f"{sub.family}: {sub.normalized_score:.2f}  {sub.top_reasons}")
-
-# Confidence in the result
-quality = compute_quality_score(report)
-conf = compute_confidence_score(report, quality)
-print(conf.verdict_certainty)                  # high / medium / low
-
-# Fast mode for throughput screening
-report = scan(Path("adapter.safetensors"), fast=True)
+result = scan(Path("adapter_model.safetensors"))
+print(result.verdict.action, result.verdict.level)
+for reason in result.verdict.reasons:
+    print(reason.code, reason.message)
 ```
 
----
+Put `adapter_config.json` next to the `.safetensors` file (as PEFT saves it): the scan needs
+`lora_alpha` to know the real size of the update.
 
-## What's New in v1.0.3
+| Option | Meaning |
+|---|---|
+| `--format text\|json\|full-json\|sarif` | output; `full-json` adds per-module features |
+| `--policy default\|strict` | `strict` blocks on structural red flags (see below) |
+| `--fail-on review\|block` | exit code 2 if the verdict reaches this action |
+| `--mode full\|fast` | `fast` uses fewer samples for the kurtosis estimate |
+| `--include-modules`, `--include-heads` | per-module / per-attention-head detail in JSON |
+| `--full-paths` | report the absolute path instead of the file name |
 
-Security release. See [CHANGELOG.md](CHANGELOG.md) and [SECURITY.md](SECURITY.md).
-
-- **Fail-closed verdict:** failed or degraded parsing never yields `allow`.
-- **Validation before allocation:** bounded header, regular files only, dtype/shape/size/rank
-  checks from the header, per-tensor loading; skipped tensors are reported.
-- **NaN/Inf weights** mark the scan degraded instead of silently disabling detectors.
-- **Terminal-safe text output** for tensor names and paths.
-- **Supply chain:** least-privilege, SHA-pinned CI; gitleaks and pip-audit; locked
-  dependencies; `huggingface_hub` and `psutil` moved to the `[bench]` extra.
-
-## What's New in v1.0.2
-
-### BehavioralResult / ProbeResult v1.0.0 wire contract
-
-`BehavioralResult` is promoted from a 5-field placeholder to the full public v1.0.0 schema.
-New / promoted fields: `behavioral_verdict`, `trigger_confirmed`, `behavioral_score`,
-`semantic_drift_score`, `base_model_used`, `base_model_sha`, `probe_set_version`,
-`n_probes_run`, `n_probes_confirmed`, `n_probes_skipped`, `skip_reason` (enum),
-`probe_results: list[ProbeResult]`, `targeted_layers`. Legacy `sandbox_verdict` and
-`raw` fields are kept for backwards compatibility.
-
-`ProbeResult` fields: `probe_id`, `probe_set_version`, `trigger_type`,
-`verdict` (confirmed / cleared / inconclusive / skipped / error), `trigger_confirmed`,
-`semantic_drift`, `kl_drift`, `string_match`, `refusal_bypass`, `severity_weight`,
-`base_output_hash`, `patched_output_hash`, `elapsed_ms`, `error`.
-
-Both schemas use `extra='ignore'` and `frozen=True` for forward compatibility. This is
-the public wire contract; downstream M2 implementations populate it.
-
-### `scan_to_result()` public API
-
-New top-level `scan_to_result(adapter_path)` returns the engine-level `ScanResult`
-(with `.identity`, `.verdict`, `.artifact`) directly, bypassing the `AdapterReport`
-intermediary. Required by `CombinedReport` and downstream sandbox runners; previously
-only accessible via the private `cli._build_scan_result`.
-
-### `ScanPhase.BEHAVIORAL`
-
-New `ScanPhase.BEHAVIORAL` enum member marks the M2 pipeline phase in `ScanError`
-records, completing the phase taxonomy: `parse / metadata / feature / scoring /
-reporting / behavioral`.
+Exit codes: `0` completed, `1` the adapter could not be analysed (the verdict is still
+`review`), `2` the `--fail-on` threshold was reached.
 
 ---
 
-## Output Formats
-
-### `--format text` (default)
-
-Human-readable terminal output with risk level, ensemble score, confidence, and findings.
-ANSI colour enabled by default (`--no-color` to disable). Add `--verbose` for full score
-breakdown, per-layer findings, and analysis quality block.
-
-### `--format summary-json`
-
-Emits a versioned `ScanResult` JSON document (`schema_version: "1.0.0"`) — the stable
-public contract for CI gates and machine consumers. Embeds `ScanIdentity` (deterministic
-`scan_id`) and `AdapterArtifactIdentity` (content hash).
-See [docs/output-schema/scan-result.md](docs/output-schema/scan-result.md).
-
-### `--format debug-json`
-
-Extends `ScanResult` with per-layer `tensor_records` and `feature_family_results`.
-Not a stable contract — for local debugging only.
-
-### `--format sarif`
-
-Emits [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/) for direct ingestion by
-GitHub code scanning. Findings include `properties.security-severity` (0–10 CVSS-like scale).
-
-```yaml
-# .github/workflows/adapter-scan.yml
-- name: Scan LoRA adapter
-  run: adaptersentry scan adapter.safetensors --format sarif --output results.sarif
-
-- name: Upload to GitHub code scanning
-  uses: github/codeql-action/upload-sarif@v3
-  with:
-    sarif_file: results.sarif
-  if: always()
-```
-
-See [docs/cli/usage.md](docs/cli/usage.md) for full flag reference and exit codes.
-
----
-
-## Scan Modes
-
-| Mode | SVD | Stats | IsolationForest | Use for |
-|------|-----|-------|-----------------|---------|
-| `--mode full` (default) | Full spectrum | Full tensor | Always | Security audits, final verification |
-| `--mode fast` | Top-50, randomised | 50K-element sample | Skipped >5M elements | Corpus screening, CI pre-filter |
-
-Fast mode preserves detection quality for typical backdoor patterns.
-See [docs/architecture/scan-modes.md](docs/architecture/scan-modes.md) for details.
-
----
-
-## How It Works
-
-AdapterSentry inspects `.safetensors` files in read-only mode without executing any model code.
-
-### M1 pipeline
+## How it works
 
 ```
-adapter.safetensors
-        │
-  parsers/          has_lora_pairs() pre-check → load_adapter → _group_lora_layers
-                    bfloat16 tensors auto-converted to float32 (v0.4.0)
-        │
-  engine/           FeatureExtractor.extract_layer() per LoRA pair
-  features/         spectral · norm · distribution · entropy · outlier
-                    entropy_compression · inter_layer_similarity
-        │
-  detectors/        wasserstein · cross_layer · init_detector
-        │
-  scoring/          EnsembleDetector.score_families() → EnsembleSignal [0–100]
-                    compute_score_breakdown() → ScoreBreakdown (7 families)
-                    compute_confidence_score() → ConfidenceScore
-                    RiskVerdict: allow / review / block
-        │
-  reporting/        rank_layer_findings() → list[PerLayerFinding] top-10
-                    render_human_summary() → fixed-block CLI output
-        │
-  schemas/          ScanResult v1.0.0  →  reporters/text · summary-json · debug-json · sarif
+file ─► validate ─► inventory ─► per module (streamed) ─► compare within ─► structural ─► verdict
+        header       every         exact ΔW features         each module       findings
+        & limits     tensor        via r×r cores              family
 ```
 
-See [docs/architecture/m1-architecture.md](docs/architecture/m1-architecture.md) for detail.
+1. **Validate before reading.** The file must be a regular `.safetensors` file; the header
+   length, dtype, shape, byte ranges, element counts and LoRA rank are checked from the header
+   before any tensor is allocated.
+2. **Inventory.** Every tensor is classified: LoRA A/B pairs (with layer, expert and module),
+   full weights shipped via `modules_to_save`, DoRA vectors, trainable-token deltas, and
+   anything that cannot be analysed — nothing is skipped silently.
+3. **Exact features, one module at a time.** For ΔW = s·B·A, where s = α/r (or α/√r with
+   rsLoRA) comes from `adapter_config.json`, the singular values, norms and row/column norms
+   are computed exactly through the r×r matrices AAᵀ and BᵀB — ΔW itself (235 M values for a
+   70B MLP layer) is never built. Features describe the **shape** of the update, which the
+   literature finds informative, rather than its size:
+   stable rank, participation ratio, spectral entropy, concentration of the leading direction
+   versus a random baseline, entry kurtosis (estimated by importance sampling of rows so rare
+   spiky rows are not missed), and how concentrated the update is on a few output rows or
+   input columns — for `lm_head` and embeddings, on a few tokens.
+4. **Compare within the adapter.** Each module is compared with its family (all `q_proj`, all
+   `down_proj`, …): the smooth trend with depth is removed with a Theil–Sen line, then robust
+   z-scores (median/MAD) mark modules that depart from their family. This needs no reference
+   data and is insensitive to the adapter's overall strength. It runs for families of at
+   least 16 modules.
+5. **Structural findings** that numbers cannot show: complete `lm_head` / embedding / router
+   matrices shipped in the adapter, LoRA on a mixture-of-experts router, ranks that differ from
+   the declared `r` (typical of merged adapters), code/pickle/archive files next to the adapter.
+6. **Verdict** — one rule set, fail-closed:
+
+| Situation | Action |
+|---|---|
+| File could not be parsed, or part of it was not analysed | at least `review` |
+| A module departs from its family (robust z ≥ 8) | `review` |
+| Structural red flag | `review`; `block` with `--policy strict` |
+| Reference profile for the model family says p ≤ α | `review` / `block` *(reference profiles: next release)* |
+| Otherwise | `allow` |
+
+Without a calibrated reference profile the default policy never blocks: the false-positive
+rate of a block would be unknown.
+
+### Performance
+
+Measured on an 8-CPU server with a synthetic Llama-3.3-70B-shaped adapter
+(80 layers × 7 modules, r = 64, 1.66 GB bf16): `adaptersentry scan` end to end in
+**~18–20 s**, peak process memory **~160 MB** (Python and numpy included). The 1.x engine
+needed ~3.3 GB just to load the same file.
 
 ---
 
-## M1 Detection Methods
+## Limits — read before relying on a verdict
 
-### Detectors
-
-| Detector | Ensemble weight | Signal |
-|----------|-----------------|--------|
-| **Kurtosis** | 0.340 | Excess kurtosis > 10× — heavy-tailed weights consistent with sparse injection |
-| **Energy concentration** | 0.265 | `σ₁² / Σσᵢ² > 0.95` (SVD) — single dominant direction; consistent with rank-1 trigger |
-| **Wasserstein distance** | 0.135 | W1 distance between lora_A and lora_B distributions — large asymmetry signals different populations |
-| **Cross-layer consistency** | 0.113 | Low score = anomaly concentration in specific layers; targeted modification pattern |
-| **Shannon entropy** | 0.067 | Near-zero (sparse) or near-unity (uniform noise) both flagged |
-| **Z-score outlier rate** | 0.053 | Fraction of weights beyond ±3σ; Gaussian adapters have < 0.3% |
-| **Isolation Forest** | 0.026 | Unsupervised anomaly score; catches non-Gaussian structure Z-score misses |
-
-### Extended feature families (v0.4.0)
-
-| Family | Signals |
-|--------|---------|
-| **DistributionFeatures** | kurtosis, skewness, mean, std, median, p01, p99, iqr, zero_ratio, delta_entropy; per-tensor A/B stats |
-| **EntropyCompressionFeatures** | value_repeat_ratio, unique_value_ratio, compression_ratio (zlib), byte_entropy, sign_entropy, sign_balance, quantization_suspect_score |
-| **InterLayerSimilarityFeatures** | pairwise cosine + Pearson; top-5 suspicious non-adjacent pairs (cosine > 0.85); per-module-type mean similarity |
-
-### Score breakdown (7 families)
-
-| Family | Weight | Primary signals |
-|--------|--------|-----------------|
-| `distribution` | 30% | kurtosis, skewness, percentiles, zero_ratio, delta_entropy |
-| `similarity` | 20% | inter-layer cosine/Pearson, suspicious pairs |
-| `parse` | 10% | parse_status, tensor errors |
-| `metadata` | 10% | base_model, peft_type, target_modules, rank |
-| `norm` | 10% | fro_norm_delta, delta_norm_ratio |
-| `entropy` | 10% | value_repeat_ratio, byte_entropy, quantization_suspect_score |
-| `training_pattern` | 10% | cross_layer_consistency, wasserstein, init_status |
-
-### Init-only adapter detection
-
-Standard PEFT LoRA initialisation sets `B = 0` and draws `A` from a uniform distribution.
-M1 identifies this pattern when `std_B < 1e-6` and `entropy_A > 0.98` hold across all layers,
-reports `training_status: INIT_ONLY`, and suppresses init-artifact flags.
-
-`training_status: PARTIALLY_TRAINED` flags adapters where some layers are trained and others
-remain at init — consistent with targeted-layer injection.
-
-### Risk levels
-
-| Level | Ensemble score | Meaning |
-|-------|---------------|---------|
-| LOW | 0–6 | No anomalies detected. |
-| MEDIUM | 7–13 | Elevated signal; likely benign but warrants review. |
-| HIGH | 14–35 | Multiple independent detectors agree. Manual inspection required. |
-| CRITICAL | 36–100 | Strong multi-signal evidence. Do not load without thorough review. |
-
-**Fail-closed.** `recommended_action` is `allow` only when the whole adapter was parsed and
-analysed. If any tensor could not be read, was not part of a `lora_A`/`lora_B` pair, or held
-NaN/Inf values, the scan is `DEGRADED`; if the file could not be parsed, it is `FAILED`.
-Both yield at least `review` with `m2_recommended: true`. A low score on a degraded scan is
-not evidence that the adapter is safe.
+- **Static analysis is a first filter, not a proof.** Research on weight-space detection
+  shows strong results in the lab and clear limits: detectors trained on known attacks fail on
+  new ones, and on larger models the variation between honest adapters trained with different
+  random seeds can exceed the signal of a backdoor. A low-risk verdict is not evidence that an
+  adapter is safe; behavioural verification in an isolated environment remains necessary for
+  adapters you do not trust.
+- **Thresholds are not yet calibrated.** Intra-adapter thresholds (|z| > 3.5 outlier,
+  ≥ 8 review) were set on synthetic data. Reference profiles per model family and a measured
+  detection rate on labelled clean/poisoned adapters are the next step; until then the
+  confidence of a verdict is at most `medium`.
+- **An attacker who knows the detector** can try to spread a backdoor across many directions
+  and modules, or pad the update with inert components. Static analysis without base-model
+  information cannot fully rule this out.
+- **Not analysed:** full weight matrices (they need the base model), trainable-token deltas;
+  DoRA adapters are analysed partially. Each of these is reported and lowers the verdict's
+  confidence or raises it to `review`.
+- **Pickle-based formats** (`.bin`, `.pt`) are never deserialised. Use a dedicated
+  serialisation scanner for them.
 
 ---
 
-## Benchmark Results
+## Output: ScanResult 2.0.0
 
-### Real-World Hub Corpus (500 adapters, v0.4.0)
+`--format json` produces one document per adapter: `scan` (who/when/how), `artifact` (hashes,
+provenance — file name only unless `--full-paths`), `adapter` (format, family, rank, α,
+scaling, modules), `status` + `coverage` (what was and was not analysed), `verdict`,
+`anomaly` (what the verdict rests on), `findings` (with exact layer/module/tensor locations),
+optional `modules`, and `errors`.
 
-AdapterSentry M1 was run against 500 public LoRA adapters from HuggingFace Hub
-(filter: `peft`, sorted by download count). Only `adapter_model.safetensors` downloaded;
-no base model weights fetched. **This is an observational static scan, not a malware classifier.**
-
-| Risk level | Count | Share |
-|------------|-------|-------|
-| LOW | 289 | 64.2% |
-| MEDIUM | 132 | 29.3% |
-| HIGH | 24 | 5.3% |
-| CRITICAL | 5 | 1.1% |
-
-Ensemble score p50 ≈ 4.35 · p90 ≈ 11.71 · p99 ≈ 36.0.
-
-High-scoring adapters are **investigation candidates**, not confirmed malicious content.
-A high ensemble score is the beginning of an investigation, not a conclusion.
-
-### Throughput (v1.0.0, 8-CPU VPS)
-
-| Mode | Backend | Workers | Throughput | Wall time (500) | vs baseline |
-|------|---------|---------|-----------|-----------------|-------------|
-| `fast` | mp | 8 | 203/min | 2.5 min | 168× |
-| `fast` | ray | 8 | 211/min | 2.4 min | 176× |
-| `full` | mp | 4 | 22/min | 22.5 min | 18× |
-| `full` | ray | 8 | 38/min | 13.3 min | 31× |
-| `full` | **ray + rust** | 8 | **69/min** | **7.2 min** | **57×** |
-
-Baseline: v0.2.x sequential on 2-CPU VPS — 1.2 adapters/min, 195 min for 500 adapters.
-
-AlgoCore single-adapter (168 layers, full mode): **5.9s** (was 40s pre-optimisation, −85%).
-
-Benchmark methodology: [docs/benchmarks/methodology.md](docs/benchmarks/methodology.md).
-
-### Small Benchmark
-
-| Adapter | Training status | Ensemble | Risk |
-|---------|----------------|----------|------|
-| llamafactory/tiny-random-Llama-3-lora | TRAINED | 4.1 | LOW |
-| peft-internal-testing/tiny_T5ForSeq2SeqLM-lora | TRAINED | 3.9 | LOW |
-| ybelkada/opt-350m-lora | INIT_ONLY | 2.5 | LOW |
-| artek0chumak/bloom-560m-safe-peft | INIT_ONLY | 8.0 | MEDIUM |
-| **qylu4156/strongreject-15k-v1** | TRAINED | **14.6** | ⚠️ **HIGH** |
+- Field reference: [docs/output-schema/scan-result.md](docs/output-schema/scan-result.md)
+- JSON Schema: [docs/output-schema/scan-result-2.0.0.schema.json](docs/output-schema/scan-result-2.0.0.schema.json)
+- `adaptersentry.load_scan_result()` validates a document and rejects other major versions.
 
 ---
 
-## Output Schema
+## Migrating from 1.x
 
-<details>
-<summary>ScanResult schema (summary-json — stable, schema_version 1.0.0)</summary>
+| 1.x | 2.0.0 |
+|---|---|
+| `analyze()`, `scan()` → `AdapterReport`, `scan_to_result()` | `scan()` → `ScanResult` |
+| `verdict.recommended_action` | `verdict.action` |
+| `overall_score`, `ensemble.score` (0–100) | removed — `verdict.level` + `anomaly` (z-scores, later p-values) |
+| `status`, `parse_status`, `analysis_mode` | `status` + `coverage` |
+| `--format summary-json` / `debug-json` | `--format json` / `full-json` |
+| `--fail-on LOW…CRITICAL` (finding severity) | `--fail-on review\|block` (verdict action) |
+| `--rank` | removed — rank is read from the tensors and checked against the config |
+| `adaptersentry-m1` command | `adaptersentry scan` |
 
-```json
-{
-  "schema_version": "1.0.0",
-  "identity": {
-    "scan_id": "sha256:...",
-    "analyzer_version": "1.0.3",
-    "schema_version": "1.0.0"
-  },
-  "artifact": {
-    "content_hash": "sha256:...",
-    "file_size_bytes": 32768
-  },
-  "verdict": {
-    "overall_score": 0,
-    "overall_level": "LOW",
-    "recommended_action": "allow",
-    "m2_recommended": false,
-    "training_status": "TRAINED"
-  },
-  "ensemble": {"score": 4.1, "risk_level": "LOW"},
-  "findings": [],
-  "errors": [],
-  "status": "ok",
-  "parse_status": "ok",
-  "n_layers": 2,
-  "n_layers_analyzed": 2
-}
-```
-
-Full schema reference: [docs/output-schema/scan-result.md](docs/output-schema/scan-result.md)
-
-</details>
-
-<details>
-<summary>Legacy AdapterReport schema (scan() / --format json)</summary>
-
-```json
-{
-  "schema_version": "1.0.0",
-  "tool": {"name": "adaptersentry", "version": "1.0.3"},
-  "risk_summary": {
-    "overall_risk": 0, "risk_level": "LOW",
-    "ensemble_score": 4.1, "ensemble_risk_level": "LOW",
-    "training_status": "TRAINED", "n_layers": 2
-  },
-  "findings": [],
-  "errors": [],
-  "analysis_mode": "full"
-}
-```
-
-Full schema reference: [docs/output-schema/adapter-report.md](docs/output-schema/adapter-report.md)
-
-</details>
-
----
-
-## Architecture and Docs
-
-| Document | Description |
-|----------|-------------|
-| [docs/architecture/m1-architecture.md](docs/architecture/m1-architecture.md) | Full parser → features → detectors → scoring → report pipeline |
-| [docs/architecture/scan-engine.md](docs/architecture/scan-engine.md) | Batch scan engine: worker pool, cache, manifest, crash recovery |
-| [docs/architecture/scan-modes.md](docs/architecture/scan-modes.md) | fast vs full mode: what changes, detection equivalence |
-| [docs/architecture/open-core-boundary.md](docs/architecture/open-core-boundary.md) | What is OSS, integration contract |
-| [docs/architecture/repo-layout.md](docs/architecture/repo-layout.md) | Repository structure |
-| [docs/output-schema/scan-result.md](docs/output-schema/scan-result.md) | ScanResult v1.0.0 field reference |
-| [docs/output-schema/adapter-report.md](docs/output-schema/adapter-report.md) | AdapterReport v1.0.0 field reference |
-| [docs/output-schema/error-taxonomy.md](docs/output-schema/error-taxonomy.md) | Error categories, severity, scan phases |
-| [docs/cli/usage.md](docs/cli/usage.md) | Full CLI flag reference, exit codes, SARIF integration |
-| [docs/benchmarks/methodology.md](docs/benchmarks/methodology.md) | Benchmark intent, pipeline, and limitations |
+1.x results are not converted: re-scan the adapters.
 
 ---
 
@@ -454,52 +193,31 @@ Full schema reference: [docs/output-schema/adapter-report.md](docs/output-schema
 ```bash
 git clone https://github.com/nkorvyakov28-AS/adaptersentry-m1
 cd adaptersentry-m1
-pip install -e ".[dev]"
-pytest tests/ -q                    # run all 773 tests
-adaptersentry scan --help           # verify CLI
-
-# Optional: build Rust extensions (OPT-04, requires Rust toolchain)
-pip install maturin
-cd adaptersentry-rs
-VIRTUAL_ENV=$(python -c "import sys; print(sys.prefix)") maturin develop --release
+uv sync --frozen --extra dev        # or: pip install -e ".[dev]"
+pytest tests/ -q
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for code conventions and commit style.
+Architecture: [docs/architecture/m1-architecture.md](docs/architecture/m1-architecture.md) ·
+CLI: [docs/cli/usage.md](docs/cli/usage.md) · Batch engine:
+[docs/architecture/scan-engine.md](docs/architecture/scan-engine.md)
 
----
+AdapterSentry M1 is the open static-analysis layer. Planned: M2 Behavioral Sandbox — advanced
+behavioral analysis.
 
-## Requirements
+## Background
 
-```
-python >= 3.11
-safetensors >= 0.4.0
-numpy >= 1.24.0
-scipy >= 1.11.0
-scikit-learn >= 1.3.0
-pydantic >= 2.5.0
-rich >= 13.0.0
-psutil >= 5.9.0
-
-# Optional extras
-ray[default] >= 2.9.0      # pip install "adaptersentry[ray]"
-huggingface_hub >= 0.20.0  # pip install "adaptersentry[bench]"
-```
-
----
+The feature design follows published work on weight-space backdoor detection in LoRA adapters,
+including *Detecting Backdoored LoRAs from Weights Alone* (arXiv:2602.15195),
+*Token-Level Generalization in LoRA Adapter Backdoors* (arXiv:2605.30189) and Z-PEFT
+(arXiv:2608.02271). Their results motivate the choices above: shape over magnitude,
+per-module and per-head features, MLP coverage, and one-class calibration instead of a
+classifier trained on known attacks.
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) for the full security policy and disclosure procedures.
-
-**Reporting a malicious adapter found in the wild:** Open a GitHub issue with the label
-`malicious-adapter`. Include the HuggingFace repo ID and the M1 JSON report.
-
-**Reporting a vulnerability in AdapterSentry:** Follow coordinated disclosure.
-Do not open public GitHub issues for vulnerabilities in AdapterSentry itself.
-See [SECURITY.md](SECURITY.md) for the full process.
-
----
+See [SECURITY.md](SECURITY.md). Report a malicious adapter found in the wild with a GitHub
+issue labelled `malicious-adapter`; report vulnerabilities in AdapterSentry privately.
 
 ## License
 
-Apache 2.0. See [LICENSE](LICENSE).
+Apache 2.0 — see [LICENSE](LICENSE).

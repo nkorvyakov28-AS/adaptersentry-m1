@@ -1,38 +1,38 @@
 # Open-Core Boundary
 
-AdapterSentry follows an open-core model. The static analysis engine is fully
-open source. Advanced detection capabilities are planned for future releases.
+AdapterSentry M1 — the static analyzer in this repository — is open source under
+Apache 2.0.
 
-## What lives in this repository (OSS)
+| Layer | Status | Scope |
+|---|---|---|
+| M1 Static Analyzer | Available (this repository) | Static analysis of adapter weights and files |
+| M2 Behavioral Sandbox | Planned | Advanced behavioral analysis |
+| M3, M4 | Planned | — |
 
-| Component | Location | Description |
-|-----------|----------|-------------|
-| M1 Static Analyzer | `src/adaptersentry/` | Read-only weight tensor inspection |
-| Parsers | `src/adaptersentry/parsers/` | safetensors loading, metadata extraction |
-| Features | `src/adaptersentry/features/` | Tensor statistics, SVD, layer-level features |
-| Detectors | `src/adaptersentry/detectors/` | Entropy, outlier, init, cross-layer, Wasserstein |
-| Scoring | `src/adaptersentry/scoring/` | Rule-based and ensemble risk scoring |
-| Schemas | `src/adaptersentry/schemas/` | Pydantic report contracts |
-| Reporters | `src/adaptersentry/reporters/` | Text, JSON, SARIF output |
-| Batch scan engine | `src/adaptersentry/engine/` | Worker pool, cache, manifest, result sink |
-| CLI | `src/adaptersentry/cli/` | `adaptersentry scan` and `adaptersentry batch` |
-| GitHub Action helper | `src/adaptersentry/integrations/` | GitHub Actions output helpers |
-| Benchmark harness | `benchmarks/` | Throughput and regression testing |
+Nothing beyond M1 is part of this package.
 
-## What is not in this repository
+## What M1 contains
 
-Advanced capabilities beyond static analysis are planned for future releases
-and are not part of this open-source package.
+Everything under `src/adaptersentry/`: parsers, features, detectors, verdict rules, the
+`ScanResult 2.0.0` schema, reporters, the CLI and the batch engine. See
+[repo-layout.md](repo-layout.md).
 
-## Integration contract
+## Public contract
 
-External integrations MUST consume AdapterSentry only through its public API:
+Integrations should depend only on:
 
-1. `adaptersentry.scan()` — typed `AdapterReport` result
-2. `adaptersentry.scan_to_result()` — engine-level `ScanResult` with `.identity`, `.verdict`, `.artifact` (added v1.0.2)
-3. `adaptersentry batch` — `ScanResult` JSON output (`schema_version = "1.0.0"`)
-4. `--format summary-json` — stable machine-readable contract for CI gates
-5. `--format sarif` — SARIF 2.1.0 for GitHub code scanning
+1. `adaptersentry.scan(path, *, mode, policy, include_modules, include_heads, full_paths,
+   run_id, hf_repo_id, hf_revision) -> ScanResult`
+2. `adaptersentry.load_scan_result(data) -> ScanResult` — validates a stored document and
+   rejects other major schema versions
+3. `adaptersentry.ScanResult` and its JSON form, `ScanResult 2.0.0`
+   ([field reference](../output-schema/scan-result.md),
+   [JSON Schema](../output-schema/scan-result-2.0.0.schema.json))
+4. The CLI: `adaptersentry scan` (`--format text|json|full-json|sarif`) and
+   `adaptersentry batch`, with their exit codes
 
-Do not depend on internal modules — these are not part of the public contract
-and may change between minor versions.
+Decisions should read `verdict.action`. Within 2.x, fields may be added but the meaning of
+existing fields does not change.
+
+All other modules (`parsers`, `features`, `detectors`, `scoring`, `engine`, …) are internal
+and may change in any release.

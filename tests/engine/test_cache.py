@@ -157,3 +157,26 @@ class TestContextManager:
         with CacheStore.open(tmp_path / "cache") as store:
             _write_result(store)
             assert store.lookup(_FAKE_CONTENT_HASH, _FAKE_CONFIG_HASH) is not None
+
+
+class TestHostileCacheIndex:
+    def test_path_traversal_in_index_is_rejected(self, tmp_path: Path) -> None:
+        store = CacheStore.open(tmp_path / "cache")
+        entry = _write_result(store)
+        outside = tmp_path / "outside.gz"
+        outside.write_bytes(gzip.compress(b'{"planted": true}'))
+        crafted = entry.model_copy(update={
+            "result_path": "../../outside.gz",
+            "result_hash": "sha256:" + hashlib.sha256(outside.read_bytes()).hexdigest(),
+        })
+        assert store.validate_and_read(crafted, _FAKE_VERSION) is None
+        store.close()
+
+    def test_gzip_bomb_is_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import adaptersentry.engine.cache as cache_mod
+
+        monkeypatch.setattr(cache_mod, "_MAX_RESULT_BYTES", 1024)
+        store = CacheStore.open(tmp_path / "cache")
+        entry = _write_result(store, result_json="x" * 5000)
+        assert store.validate_and_read(entry, _FAKE_VERSION) is None
+        store.close()

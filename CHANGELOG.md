@@ -3,6 +3,73 @@
 All notable changes to AdapterSentry are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [2.0.0] — unreleased
+
+A new analysis engine and result contract. 1.x results are not compatible; re-scan adapters.
+
+### Why
+
+The 1.x features were computed on the LoRA `A` matrix, which mostly reflects random
+initialisation, and on `A` again in place of ΔW whenever ΔW exceeded 4 M entries — for any
+model from ~1B up. `lora_alpha` was ignored, so shrinking `B` and raising `alpha` hid an
+update. Absolute thresholds did not transfer across model sizes, and the whole adapter was
+loaded into memory (~3.3 GB for a 70B adapter).
+
+### Added
+
+- **Exact low-rank statistics** of the effective update ΔW = s·B·A through r×r Gram
+  matrices: singular values, norms, every row/column norm, inner products — ΔW is never built.
+  Entry kurtosis by importance sampling of rows, so rare concentrated rows are not missed.
+- **ESR features** per module and per attention head: stable rank, participation ratio,
+  spectral entropy, concentration versus a random baseline, kurtosis, and concentration of the
+  update on a few outputs/inputs (tokens for `lm_head` and embeddings).
+- **adapter_config.json**: effective scale α/r or α/√r (rsLoRA), rank/alpha patterns (literal
+  only — regexes from the file are never compiled), declared vs actual rank and modules.
+- **Streaming**: one LoRA pair in memory at a time. A 70B-shaped adapter (560 modules, r=64,
+  1.66 GB) scans in ~18–20 s end to end (`adaptersentry scan`, 8-CPU server) with a peak
+  process RSS of ~160 MB; loading the same file took +3.3 GB in 1.x.
+- **Intra-adapter comparison**: robust z-scores of each module against its family after
+  removing the depth trend (Theil–Sen); needs no reference data; families of ≥ 16 modules.
+- **Structural findings**: full `lm_head` / embedding / router matrices shipped in the adapter,
+  LoRA on a MoE router, ranks that differ from the declared `r` (merged adapters), code /
+  pickle / archive files next to the adapter.
+- **Verdict policies**: `--policy default` (never blocks without a calibrated reference
+  profile) and `--policy strict` (blocks on structural red flags).
+- **ScanResult 2.0.0** with `scan`, `artifact` (provenance; file name only unless
+  `--full-paths`), `adapter`, `status` + `coverage`, `verdict` (action, level, reasons,
+  confidence and its limits), `anomaly`, `findings` with exact locations, opt-in `modules`.
+  Published JSON Schema; `load_scan_result()` rejects other major versions.
+- MoE awareness (experts grouped per family), embedding LoRA, DoRA / trainable-token detection.
+
+### Changed
+
+- `adaptersentry.scan()` returns `ScanResult`; `--format json|full-json|sarif|text`;
+  `--fail-on review|block` compares the verdict action.
+- SARIF: layer/module logical locations, relative artifact URI with SHA-256, and a result for
+  any non-`allow` verdict.
+- CLI and workers run BLAS single-threaded (faster for many small matrices). `import
+  adaptersentry` no longer imports numpy, so the setting takes effect before numpy loads.
+- `adapter_config.json` and sibling files are looked up next to the path as given, not next
+  to a symlink target (Hugging Face cache: the config sits in `snapshots/<rev>/`, the
+  weights in `blobs/`).
+
+### Removed
+
+- `analyze()`, `AdapterReport`, `scan_to_result()`, `DebugReport`, the `adaptersentry-m1`
+  command, `--format summary-json|debug-json`, `--rank`, `--debug`.
+- 1.x detectors and scores: IsolationForest, z-score, entropy, Wasserstein, cross-layer
+  consistency, init-only suppression, the additive rule score and the sigmoid ensemble,
+  ScoreBreakdown and ConfidenceScore.
+- The optional Rust extension (`adaptersentry-rs`). It accelerated 1.x statistics that 2.0 no
+  longer computes; the 2.0 hot paths already run in BLAS/numpy.
+
+### Known limitations
+
+- Intra-adapter thresholds (3.5 / 8) are uncalibrated; reference profiles per model family and
+  a measured detection rate on labelled adapters are planned for the next release.
+- Static analysis cannot rule out an adaptive attacker; behavioural verification remains
+  necessary for untrusted adapters.
+
 ## [1.0.3] — 2026-09-29
 
 Security release. All users of earlier versions should upgrade: before 1.0.3 a

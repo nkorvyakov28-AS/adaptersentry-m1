@@ -2,42 +2,46 @@
 
 ## Security Model — M1 Static Analyzer
 
-AdapterSentry M1 operates in **read-only / parse-only mode** on untrusted `.safetensors` files.
-The following properties hold for the scan path (`adaptersentry scan`, `adaptersentry batch`,
-`scan()`, `scan_to_result()`):
+AdapterSentry M1 operates in **read-only / parse-only mode** on untrusted `.safetensors` files
+and on the `adapter_config.json` next to them. The following properties hold for the scan path
+(`adaptersentry scan`, `adaptersentry batch`, `adaptersentry.scan()`):
 
-- M1 does not run inference, load a base model, or execute any model code.
-  `eval()`, `exec()` and `pickle` are never used on adapter content.
+- M1 does not run inference, load a base model, or execute any model code. `eval()`, `exec()`
+  and `pickle` are never used on adapter content, and nothing from the file or its config is
+  compiled as a regular expression (PEFT `rank_pattern` / `alpha_pattern` regexes are reported,
+  not executed).
 - Only `.safetensors` is parsed. Pickle-based formats (`.bin`, `.pt`) are never deserialised;
-  such files fail the scan.
-- **Files.** The path is resolved with `pathlib.Path.resolve()` and must be a regular file
-  (no FIFOs or devices, including through symlinks) with a `.safetensors` suffix after
-  resolution and a size of at most 64 GiB. Batch discovery skips non-regular files.
-- **Header.** The declared JSON header length is bounded (100 MB) and checked against the
-  file size before it is read.
+  pickle, code and archive files found next to an adapter are reported as a red flag.
+- **Files.** The path is resolved with `pathlib.Path.resolve()` and must be a regular file (no
+  FIFOs or devices, including through symlinks) with a `.safetensors` suffix after resolution
+  and a size of at most 64 GiB. `adapter_config.json` must be a regular file of at most 1 MB.
+  Batch discovery and identity hashing skip or refuse non-regular files.
+- **Header.** The declared JSON header length is bounded (100 MB) and checked against the file
+  size before it is read.
 - **Tensors.** Before any tensor is allocated, its header entry is validated: dtype must be
-  F32, F16 or BF16; shape, byte length and offsets must be consistent; a single tensor may
-  not exceed 1 billion elements, all LoRA tensors together may not exceed 3 billion, and the
-  LoRA rank may not exceed 1024. Each tensor is loaded in its own error scope.
+  F32, F16 or BF16; shape, byte length and offsets must be consistent; a tensor may not exceed
+  1 billion elements; the LoRA rank may not exceed 1024.
+- **Bounded memory.** LoRA pairs are loaded one at a time and the effective update ΔW is never
+  materialised, so peak memory is bounded by one pair (tens of MB even for 70B–405B models)
+  rather than by the adapter size.
 - **Fail-closed verdict.** A tensor that fails validation or loading, a tensor that is not
-  part of a `lora_A`/`lora_B` pair (and is therefore not analysed), or a layer with NaN/Inf
-  weights makes the scan `DEGRADED`. A file that cannot be parsed makes it `FAILED`. Neither
-  ever yields `recommended_action: "allow"`: the action is at least `review`, with
-  `m2_recommended: true` and a `PARSE_FAILED` or `DEGRADED_PARSE` policy signal.
-  A low score on a degraded scan is not evidence that the adapter is safe.
-- **Output.** Tensor names, paths and messages are escaped before they are printed as text,
-  so control or bidi characters in an adapter cannot forge terminal output. JSON and SARIF
-  are produced with standard JSON escaping.
-- The Rust extension (optional) orders floats with a total order and cannot panic on NaN.
+  analysed (e.g. outside a LoRA pair, or a full weight matrix), or a layer with NaN/Inf
+  weights makes the scan `degraded`. A file that cannot be parsed makes it `failed`. Neither
+  ever yields `verdict.action: "allow"`: the action is at least `review`, with
+  `m2_recommended: true` and a `DEGRADED_PARSE` or `PARSE_FAILED` reason. The result model
+  enforces this on construction. A clean-looking degraded scan is not evidence of safety.
+- **Output.** Tensor names, paths and messages are escaped before they are printed as text, so
+  control or bidi characters in an adapter cannot forge terminal output. JSON and SARIF use
+  standard JSON escaping. Reports contain only the file name unless `--full-paths` is given.
 - Workers validate that adapter paths are absolute before processing, enforcing the trust
   boundary between the orchestrator and the worker pool.
 
 Operational notes:
 
-- `--ray-address` connects to an existing Ray cluster, which has no authentication by
-  default. Use it only on localhost or a trusted private network.
-- JSON and SARIF reports contain the absolute path of the scanned file. Review them before
-  attaching them to a public issue.
+- `--ray-address` connects to an existing Ray cluster, which has no authentication by default.
+  Use it only on localhost or a trusted private network.
+- With `--full-paths`, reports contain the absolute path of the scanned file; review them
+  before attaching them to a public issue.
 
 The behavioral sandbox (M2), signature engine (M3), and runtime monitor (M4) are not yet
 implemented. Their security models will be documented when those components ship.
@@ -55,9 +59,9 @@ report it so it can be investigated and disclosed responsibly.
    email `security@adaptersentry.io`.
 2. Include:
    - The HuggingFace repository ID (e.g., `author/model-name`)
-   - The M1 scan report (it contains the local file path; redact it if needed):
+   - The M1 scan report:
      ```
-     adaptersentry scan ./adapter.safetensors --format summary-json --output report.json
+     adaptersentry scan ./adapter_model.safetensors --format json --output report.json
      ```
    - A brief description of why you consider the adapter suspicious
 3. **Do not attach the `.safetensors` file itself** to public GitHub issues.
@@ -105,7 +109,7 @@ We will communicate status updates if a deadline cannot be met.
 
 | Version | Supported |
 |---|---|
-| v1.0.3 (current) | ✅ Yes |
-| v1.0.2 and earlier | ❌ No — can report `allow` for a file it failed to parse; upgrade |
+| v2.0.x (current) | ✅ Yes |
+| v1.x | ❌ No — upgrade to 2.0 (v1.0.2 and earlier can report `allow` for a file they failed to parse) |
 
 Security fixes are released for the most recent version.

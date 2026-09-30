@@ -1,33 +1,17 @@
-"""Schemas subpackage — Pydantic models for stable M1 report contracts."""
+"""Schemas: the ScanResult 2.0.0 contract and shared types."""
 
-from .adapter_metadata import AdapterMetadata
-from .adapter_report import (
-    AdapterReport,
-    AnalysisMode,
-    RiskSummary,
-    ScanTarget,
-    ToolInfo,
-    TrainingStatus,
-)
-from .errors import ErrorCategory, ErrorCode, ErrorSeverity, ScanError, ScanPhase
-from .finding import Finding, Severity, flags_to_findings
-from .tensor_record import TensorRecord
+from .errors import ErrorCategory, ErrorSeverity, ScanError, ScanPhase
+from .result import SCHEMA_VERSION, ScanResult, UnsupportedSchemaVersion, load_scan_result
+from .severity import Severity
 
 __all__ = [
-    "AdapterMetadata",
-    "AdapterReport",
-    "AnalysisMode",
+    "SCHEMA_VERSION",
     "ErrorCategory",
-    "ErrorCode",
     "ErrorSeverity",
-    "ScanPhase",
-    "Finding",
-    "RiskSummary",
     "ScanError",
-    "ScanTarget",
+    "ScanPhase",
+    "ScanResult",
     "Severity",
-    "TensorRecord",
-    "ToolInfo",
-    "TrainingStatus",
-    "flags_to_findings",
+    "UnsupportedSchemaVersion",
+    "load_scan_result",
 ]

@@ -14,7 +14,3 @@ rich>=13.0.0,<16
 # Optional — Ray actor pool backend (OPT-03)
 # pip install adaptersentry[ray]
 # ray[default]>=2.9.0,<3
-
-# Optional — Rust hot-path extensions (OPT-04, requires Rust toolchain)
-# pip install maturin
-# cd adaptersentry-rs && VIRTUAL_ENV=$(python -c "import sys; print(sys.prefix)") maturin develop --release

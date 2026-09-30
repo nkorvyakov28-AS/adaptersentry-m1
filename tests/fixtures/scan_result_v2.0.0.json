@@ -1,0 +1,160 @@
+{
+  "schema_version": "2.0.0",
+  "scan": {
+    "scan_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "run_id": null,
+    "analyzer_version": "2.0.0",
+    "config_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "mode": "full",
+    "policy": "default",
+    "started_at": "2026-10-01T10:00:00+00:00",
+    "completed_at": "2026-10-01T10:00:09+00:00",
+    "wall_time_ms": 9120
+  },
+  "artifact": {
+    "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "header_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "logical_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "file_size_bytes": 1664230912,
+    "provenance": {
+      "kind": "hf_hub",
+      "path": "adapter_model.safetensors",
+      "hf_repo_id": "example-org/llama70b-support-lora",
+      "hf_revision": "3f2a9c1",
+      "config_file": "adapter_config.json",
+      "sibling_files": []
+    }
+  },
+  "adapter": {
+    "format": "peft_lora",
+    "peft_type": "LORA",
+    "base_model_declared": "meta-llama/Llama-3.3-70B-Instruct",
+    "base_family": "llama",
+    "base_family_source": "config",
+    "n_model_layers": 80,
+    "rank_declared": 64,
+    "rank_actual": {
+      "min": 64,
+      "max": 64,
+      "distinct": [
+        64
+      ]
+    },
+    "lora_alpha": 128.0,
+    "scaling": "alpha_over_r",
+    "init_method": null,
+    "use_dora": false,
+    "target_modules_declared": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj",
+      "gate_proj",
+      "up_proj",
+      "down_proj"
+    ],
+    "target_modules_actual": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj",
+      "gate_proj",
+      "up_proj",
+      "down_proj"
+    ],
+    "modules_to_save": [],
+    "trainable_token_indices": false,
+    "moe": null,
+    "training_state": "trained",
+    "metadata_present": true,
+    "config_present": true
+  },
+  "status": "ok",
+  "coverage": {
+    "n_tensors_total": 1120,
+    "n_tensors_analyzed": 1120,
+    "n_modules": 560,
+    "n_modules_analyzed": 560,
+    "n_not_analyzed": 0,
+    "not_analyzed": [],
+    "non_finite_modules": []
+  },
+  "verdict": {
+    "action": "review",
+    "level": "MEDIUM",
+    "reasons": [
+      {
+        "code": "INTRA_OUTLIER",
+        "severity": "MEDIUM",
+        "message": "down_proj layer 47: robust z = 9.4 on row concentration"
+      },
+      {
+        "code": "NO_REFERENCE_PROFILE",
+        "severity": "LOW",
+        "message": "no calibrated reference for this stratum; action capped at review"
+      }
+    ],
+    "m2_recommended": true,
+    "confidence": {
+      "level": "medium",
+      "limiting_factors": [
+        "no reference profile"
+      ]
+    }
+  },
+  "anomaly": {
+    "intra": {
+      "max_robust_z": 9.4,
+      "n_outlier_modules": 2,
+      "depth_spikes": [
+        {
+          "module_type": "down_proj",
+          "layer": 47,
+          "z": 9.4
+        }
+      ],
+      "energy_gini": 0.41,
+      "logrms_dispersion": {
+        "down_proj": 0.18
+      },
+      "attn_mlp_ratio": -0.12
+    },
+    "reference": null,
+    "token_concentration": [],
+    "top_contributors": [
+      {
+        "feature": "row_top8",
+        "module_type": "down_proj",
+        "layer": 47,
+        "head": null,
+        "expert": null,
+        "value": 0.21,
+        "z": 9.4
+      }
+    ]
+  },
+  "findings": [
+    {
+      "rule_id": "INTRA_DEPTH_SPIKE",
+      "severity": "MEDIUM",
+      "title": "Update concentrated in one layer",
+      "message": "down_proj in layer 47 departs from the depth trend of its module family",
+      "evidence": {
+        "z": 9.4,
+        "feature": "row_top8"
+      },
+      "locations": [
+        {
+          "layer": 47,
+          "module": "down_proj",
+          "head": null,
+          "expert": null,
+          "tensor_key": "base_model.model.model.layers.47.mlp.down_proj.lora_B.weight"
+        }
+      ],
+      "remediation": "Run a behavioural check of this adapter before use"
+    }
+  ],
+  "modules": null,
+  "errors": []
+}

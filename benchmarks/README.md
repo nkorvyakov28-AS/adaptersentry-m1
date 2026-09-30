@@ -1,15 +1,18 @@
 # AdapterSentry HuggingFace Hub Benchmark
 
 `adaptersentry-bench` discovers public LoRA adapter repositories on HuggingFace Hub,
-downloads only `adapter_model.safetensors`, runs AdapterSentry M1 static analysis on
+downloads only `adapter_model.safetensors` (and `adapter_config.json` when present),
+runs the AdapterSentry M1 scanner (`adaptersentry.scanner.scan`, ScanResult 2.0.0) on
 each, and produces four output files per run.
 
 ## Important framing
 
 **This is an observational benchmark, not a malware classifier.**
 No labeled ground truth exists for the public Hub adapter population.
-High ensemble scores flag adapters as *investigation candidates*; they do not confirm
-malicious intent or content. Use terms like "anomalous", "suspicious", or
+A `review` verdict or a high intra-adapter robust z flags an adapter as an
+*investigation candidate*; it does not confirm malicious intent or content. The
+intra-adapter thresholds are uncalibrated, and the reported distributions describe
+scanner behaviour on this population, not detection accuracy. Use terms like "anomalous", "suspicious", or
 "prioritised for review" — not "malicious" or "backdoored" — when interpreting results.
 
 ---
@@ -44,6 +47,10 @@ adaptersentry-bench --limit 500 --max-download-mb 100 --min-downloads 100
 | `--min-downloads N` | 0 | Minimum HF download count to include a repo |
 | `--top-n N` | 20 | Top-N entries in aggregate suspicious lists |
 | `--sample-seed SEED` | 42 | Recorded in `candidates.json` for reproducibility |
+| `--workers N` | 1 | Parallel scan workers |
+| `--local-only` | off | Rescan cached adapters without HF Hub calls |
+| `--candidates-from FILE` | — | `candidates.json` to rescan with `--local-only` |
+| `--mode {full,fast}` | full | M1 scan mode |
 | `--verbose` | off | Enable DEBUG logging |
 
 ---
@@ -73,38 +80,56 @@ All outputs are written to `--output-dir` (default: `output/hf_benchmark_<limit>
   "hf_downloads": 12345,
   "hf_tags": ["peft", "lora"],
   "adapter_size_bytes": 6304960,
-  "training_status": "TRAINED",
-  "overall_risk": 0,
-  "risk_level": "LOW",
-  "ensemble_score": 4.1,
-  "ensemble_risk_level": "LOW",
-  "false_positive_suppressed": 0,
-  "n_flags": 0,
-  "top_flags": [],
-  "cross_layer_consistency": 1.0,
-  "wasserstein_mean": 0.0046,
-  "claimed_rank": 8,
-  "n_layers": 2
+  "scan_status": "ok",
+  "action": "allow",
+  "level": "LOW",
+  "training_state": "trained",
+  "max_robust_z": 2.7,
+  "n_outlier_modules": 0,
+  "reason_codes": ["NO_REFERENCE_PROFILE"],
+  "n_findings": 0,
+  "top_findings": [],
+  "rank_declared": 8,
+  "n_modules": 64,
+  "error_type": null,
+  "error_detail": null,
+  "tensor_keys_sample": []
 }
 ```
 
-Possible `status` values: `success`, `download_failed`, `analysis_failed`, `size_exceeded`, `skipped`.
+Field sources in ScanResult 2.0.0: `scan_status` = `status`, `action`/`level` =
+`verdict.action`/`verdict.level`, `training_state` = `adapter.training_state`,
+`max_robust_z`/`n_outlier_modules` = `anomaly.intra.*` (null when no intra-adapter
+comparison was possible), `reason_codes` = `verdict.reasons[].code`, `top_findings` =
+first five `"RULE_ID: title"` strings (≤ 120 chars), `rank_declared` =
+`adapter.rank_declared`, `n_modules` = `coverage.n_modules`.
+
+Possible `status` values: `success` (scan status ok or degraded), `unsupported_architecture`
+(the scanner found no LoRA A/B pair), `analysis_failed`, `download_failed`, `size_exceeded`,
+`not_cached`, `skipped`. Records written by the 1.x benchmark load, but their removed
+fields (ensemble score, flags, …) are dropped.
 
 ### aggregate.json top-level keys
 
 ```
-generated_at, framing, run_params, totals, failure_reason_counts,
-risk_level_distribution, training_status_distribution,
-ensemble_score_percentiles, ensemble_score_mean, counts,
-top_suspicious_by_ensemble_score, top_suspicious_by_rule_score
+generated_at, framing, run_params, totals, failure_breakdown, failure_reason_counts,
+scan_status_distribution, action_distribution, level_distribution,
+training_state_distribution, reason_code_distribution,
+max_robust_z_percentiles, max_robust_z_mean, n_with_intra_anomaly, counts,
+top_suspicious_by_max_robust_z, top_suspicious_by_structural_codes
 ```
+
+Structural reason codes used for `top_suspicious_by_structural_codes`:
+`FULL_WEIGHT_REPLACEMENT`, `ROUTER_ADAPTED`, `RANK_MISMATCH`, `SIBLING_EXECUTABLE`.
 
 ---
 
 ## Discovery pipeline
 
-1. `HfApi.list_models(filter="peft", sort="downloads", expand=["siblings"])` — one batch
-   call returns file names inline, avoiding per-repo `list_repo_files` round-trips.
+1. `HfApi.list_models(filter="peft", sort="downloads", expand=["siblings", "sha", "downloads", "tags"])`
+   — one batch call returns file names inline, avoiding per-repo `list_repo_files` round-trips.
+   The commit `sha` is stored in `candidates.json`; downloads are pinned to it and it is
+   recorded as `artifact.provenance.hf_revision` in the scan.
 2. Repos without `adapter_model.safetensors` in their file list are discarded immediately.
 3. For repos that pass the name filter, `list_repo_tree` is called to get the file size.
    Repos exceeding `--max-download-mb` are excluded from the candidate list.
@@ -141,6 +166,6 @@ pytest tests/test_bench.py -v
 ## Methodological notes
 
 - **No accuracy claims** — without labeled ground truth, precision/recall/F1 cannot be computed.
-- **Threshold calibration** — M1 thresholds were calibrated on a small development set; false-positive and false-negative rates at the Hub population scale are unknown.
+- **Threshold calibration** — the intra-adapter thresholds are uncalibrated and no reference profile is used; false-positive and false-negative rates at the Hub population scale are unknown.
 - **Coverage bias** — popular repos are over-represented; niche, recently published, or low-download adapters are under-represented.
 - **Static analysis only** — M1 inspects weight tensors; behavioural confirmation requires M2 (not yet implemented).

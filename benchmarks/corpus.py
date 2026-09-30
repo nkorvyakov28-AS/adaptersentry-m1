@@ -1,7 +1,7 @@
 """Synthetic LoRA adapter corpus generator for benchmarking.
 
 Generates deterministic .safetensors files with realistic LoRA A/B tensor pairs.
-All files are structurally valid and parseable by the M1 analyzer.
+All files are structurally valid and parseable by the M1 scanner.
 
 Tensor naming follows HuggingFace PEFT convention so the parser recognises
 them as lora_A / lora_B pairs and groups them correctly.
@@ -104,7 +104,8 @@ def generate_anomalous_corpus(
     """Generate N adapters with injected anomalies for error-rate validation.
 
     Anomalies: heavy-tailed lora_A (Cauchy distribution), non-zero lora_B,
-    high kurtosis. These should score HIGH/CRITICAL in the ensemble.
+    high kurtosis. They exercise the scanner on non-benign statistics; no particular
+    verdict is asserted (the intra-adapter thresholds are uncalibrated).
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

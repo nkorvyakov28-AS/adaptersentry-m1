@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from adaptersentry.engine.schemas.requests import AdapterScanRequest, ArtifactSource
-from adaptersentry.engine.schemas.scan_result import ScanResult, ScanStatus, DebugReport
+from adaptersentry.schemas.result import ScanResult
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ def _pool_initializer(analyzer_config_hash: str, cache_root_str: str) -> None:
     """Run once at worker startup — pre-import heavy modules and store config.
 
     All imports that would otherwise happen on every task (numpy, scipy,
-    sklearn, safetensors, the full analyzer stack) are resolved here and
+    safetensors, the scan pipeline) are resolved here and
     cached in sys.modules. Subsequent calls in the same worker process are
     no-ops at the module level.
     """
@@ -77,8 +77,7 @@ def _pool_initializer(analyzer_config_hash: str, cache_root_str: str) -> None:
     # Pre-import in dependency order — heavier last so errors surface early
     import adaptersentry.engine.identity          # BLAKE3, path resolution
     import adaptersentry.engine.cache             # CacheStore
-    import adaptersentry.engine.feature_extractor # FeatureExtractor
-    import adaptersentry.analyzer                 # numpy + scipy + sklearn + safetensors
+    import adaptersentry.scanner                  # numpy + scipy + safetensors + ESR pipeline
 
     logging.getLogger(__name__).debug(
         "Worker initialised (pid=%d, config=%s)", os.getpid(), analyzer_config_hash[:16]
@@ -87,18 +86,17 @@ def _pool_initializer(analyzer_config_hash: str, cache_root_str: str) -> None:
 
 # ── Module-level worker entry point (must be picklable) ───────────────────────
 
-def _worker_entry(req: AdapterScanRequest) -> tuple[ScanResult, DebugReport, str]:
+def _worker_entry(req: AdapterScanRequest) -> tuple[ScanResult, bool, str]:
     """Top-level worker function — dispatched by multiprocessing.Pool.
 
     Config hash and cache root come from module globals set by _pool_initializer;
     they are not re-pickled on every task dispatch.
 
-    Returns (ScanResult, DebugReport, request_id).
-    Never raises — all failures are captured in ScanResult.
+    Returns (ScanResult, from_cache, request_id). Never raises.
     """
     from adaptersentry.engine.worker import worker_main
-    result, debug = worker_main(req, _WORKER_CONFIG_HASH, _WORKER_CACHE_ROOT)
-    return result, debug, req.request_id
+    result, from_cache = worker_main(req, _WORKER_CONFIG_HASH, _WORKER_CACHE_ROOT)
+    return result, from_cache, req.request_id
 
 
 # ── build_manifest ────────────────────────────────────────────────────────────
@@ -110,6 +108,7 @@ def build_manifest(
     enabled_families: list[str] | None = None,
     force_rescan: bool = False,
     scan_mode: str = "full",
+    policy: str = "default",
 ) -> list[AdapterScanRequest]:
     """Resolve, deduplicate, and register input paths in the manifest.
 
@@ -176,6 +175,7 @@ def build_manifest(
             source=source,
             enabled_families=enabled_families,
             scan_mode=scan_mode,
+            policy=policy,
             force_rescan=force_rescan,
             submitted_at=_utcnow(),
         )
@@ -208,7 +208,6 @@ def run_batch(
     analyzer_config_hash: str,
     cache_root: Path | None = None,
     n_workers: int = 4,
-    write_debug: bool = False,
 ) -> dict[str, int]:
     """Dispatch requests to a worker pool and persist results.
 
@@ -220,10 +219,9 @@ def run_batch(
         cache_store:          Open CacheStore or None.
         results_dir:          Directory to write per-adapter JSON files.
         run_jsonl_path:       Path to the batch JSONL audit log.
-        analyzer_config_hash: Config hash from AnalyzerConfig.config_hash().
+        analyzer_config_hash: scanner.config_hash(mode, policy) of the batch.
         cache_root:           Cache store root (passed to workers as a string).
         n_workers:            Number of worker processes.
-        write_debug:          If True, write .debug.json alongside .json files.
     """
     from adaptersentry.engine.result_sink import ResultSink
 
@@ -250,14 +248,10 @@ def run_batch(
             manifest_db.update_state(req.request_id, "leased", started_at=lease_at)
 
         try:
-            for result, debug, request_id in pool.imap_unordered(
+            for result, from_cache, request_id in pool.imap_unordered(
                 _worker_entry, requests, chunksize=1
             ):
-                _handle_result(
-                    result, debug, request_id,
-                    sink, manifest_db, cache_store, stats,
-                    write_debug=write_debug,
-                )
+                handle_result(result, from_cache, request_id, sink, manifest_db, cache_store, stats)
         except KeyboardInterrupt:
             logger.warning("Batch interrupted by user — partial results persisted.")
             pool.terminate()
@@ -274,32 +268,27 @@ def run_batch(
     return stats
 
 
-def _handle_result(
+def handle_result(
     result: ScanResult,
-    debug: DebugReport,
+    from_cache: bool,
     request_id: str,
     sink: "ResultSink",
     manifest_db: "ManifestDB",
     cache_store: "CacheStore | None",
     stats: dict[str, int],
-    *,
-    write_debug: bool,
 ) -> None:
-    """Persist one result and update stats."""
+    """Persist one result and update stats (shared by the mp and Ray backends)."""
     try:
-        if result.status == ScanStatus.CACHED:
+        if from_cache:
             sink.write_cached_hit(result, manifest_db, request_id)
             stats["cached"] = stats.get("cached", 0) + 1
-        elif result.status == ScanStatus.FAILED:
+        elif result.status == "failed":
             err_msg = result.errors[0].message if result.errors else "unknown error"
             sink.write_failed(result, manifest_db, request_id, err_msg)
             stats["failed"] = stats.get("failed", 0) + 1
         else:
-            sink.write(result, debug, manifest_db, cache_store, request_id, write_debug=write_debug)
-            if result.status == ScanStatus.DEGRADED:
-                stats["degraded"] = stats.get("degraded", 0) + 1
-            else:
-                stats["ok"] = stats.get("ok", 0) + 1
+            sink.write(result, manifest_db, cache_store, request_id)
+            stats[result.status] = stats.get(result.status, 0) + 1
     except Exception as exc:
         logger.error("Failed to persist result for request %s: %s", request_id, exc)
         stats["failed"] = stats.get("failed", 0) + 1

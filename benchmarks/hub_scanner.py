@@ -8,12 +8,16 @@ v2 additions over v1:
   - Parallel scanning (--workers N, ThreadPoolExecutor)
   - Local-only rescan mode (--local-only / --candidates-from)
 
+Records are built from ``adaptersentry.scanner.scan`` (ScanResult 2.0.0):
+verdict action/level, intra-adapter anomaly summary, reason codes and findings.
+
 IMPORTANT FRAMING
 -----------------
 This benchmark measures M1 static scan behaviour at scale. It does NOT
 assess malware detection accuracy — no labeled ground truth exists for the
-public HuggingFace Hub adapter population. High ensemble scores flag adapters
-as investigation candidates. They do not confirm malicious content.
+public HuggingFace Hub adapter population. A ``review`` verdict or a high
+intra-adapter robust z flags an adapter as an investigation candidate; it does
+not confirm malicious content. The intra-adapter thresholds are uncalibrated.
 
 Usage examples
 --------------
@@ -34,7 +38,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import re
 import sys
 import threading
 import time
@@ -42,19 +45,22 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from adaptersentry.schemas.result import ScanResult as M1ScanResult
 
 logger = logging.getLogger(__name__)
 
 _ADAPTER_FILE = "adapter_model.safetensors"
 _CONFIG_FILE = "adapter_config.json"
 
-# Minimum paired lora_A/lora_B layers required to classify as a supported architecture
-_MIN_LORA_PAIRS = 2
+# Substring of the scanner error raised when a file holds no analysable LoRA pair
+_NO_LORA_PAIR_MARKER = "no lora_a/lora_b pair"
 
-# Regex patterns matching the standard PEFT LoRA tensor naming convention
-_LORA_A_RE = re.compile(r"^(.+)\.lora_A\.weight$")
-_LORA_B_RE = re.compile(r"^(.+)\.lora_B\.weight$")
+# Record limits for human-readable findings
+_MAX_TOP_FINDINGS = 5
+_MAX_FINDING_CHARS = 120
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +77,7 @@ class CandidateRepo:
     hf_tags: list[str] = field(default_factory=list)
     adapter_size_bytes: int | None = None
     has_adapter_config: bool = False
+    revision: str | None = None  # commit sha at discovery time, when the Hub reported it
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -82,18 +89,20 @@ class CandidateRepo:
 
 @dataclass
 class ScanResult:
-    """Complete result for one adapter repo.
+    """Benchmark record for one adapter repo (flattened from a ScanResult 2.0.0).
 
-    Backward-compatible with v1: all new fields have defaults and existing
-    successful-scan fields are unchanged.
+    Not to be confused with ``adaptersentry.schemas.result.ScanResult``: this is
+    the one-line JSONL record of the Hub survey. Records written by the 1.x
+    benchmark are not field-compatible; unknown fields are ignored on load.
 
     status values
     -------------
-    success                  — M1 analysis completed normally
+    success                  — M1 scan completed with status ok or degraded
+                               (see ``scan_status``)
     download_failed          — could not fetch adapter_model.safetensors
     size_exceeded            — file size exceeds --max-download-mb
-    unsupported_architecture — file has fewer than 2 lora_A/lora_B pairs
-    analysis_failed          — unexpected exception during M1 analysis
+    unsupported_architecture — the scanner found no analysable LoRA A/B pair
+    analysis_failed          — M1 scan failed for another reason, or raised
     not_cached               — local-only mode: file not found in cache
     skipped                  — (reserved)
     """
@@ -107,20 +116,19 @@ class ScanResult:
     hf_downloads: int = 0
     hf_tags: list[str] = field(default_factory=list)
     adapter_size_bytes: int | None = None
-    # M1 analysis outputs (None for non-success statuses)
-    training_status: str | None = None
-    overall_risk: int | None = None
-    risk_level: str | None = None
-    ensemble_score: float | None = None
-    ensemble_risk_level: str | None = None
-    false_positive_suppressed: int | None = None
-    n_flags: int | None = None
-    top_flags: list[str] = field(default_factory=list)
-    cross_layer_consistency: float | None = None
-    wasserstein_mean: float | None = None
-    claimed_rank: int | None = None
-    n_layers: int | None = None
-    # v2 failure detail fields
+    # M1 scan outputs (None for non-success statuses)
+    scan_status: str | None = None        # ScanResult.status: ok | degraded | failed
+    action: str | None = None             # verdict.action: allow | review | block
+    level: str | None = None              # verdict.level: LOW | MEDIUM | HIGH | CRITICAL
+    training_state: str | None = None     # adapter.training_state
+    max_robust_z: float | None = None     # anomaly.intra.max_robust_z (None when not computed)
+    n_outlier_modules: int | None = None  # anomaly.intra.n_outlier_modules
+    reason_codes: list[str] = field(default_factory=list)   # verdict.reasons[].code
+    n_findings: int | None = None
+    top_findings: list[str] = field(default_factory=list)   # "RULE_ID: title", max 5 × 120 chars
+    rank_declared: int | None = None      # adapter.rank_declared (from adapter_config.json)
+    n_modules: int | None = None          # coverage.n_modules
+    # Failure detail fields
     error_type: str | None = None         # exception class name or "no_lora_pairs_found"
     error_detail: str | None = None       # str(exception)[:200]
     tensor_keys_sample: list[str] = field(default_factory=list)  # unsupported_architecture
@@ -159,66 +167,43 @@ def append_result(
 
 
 # ---------------------------------------------------------------------------
-# Architecture check — runs before M1 to classify non-standard adapters
+# Atomic per-repo scanner (M1 scan → benchmark record)
 # ---------------------------------------------------------------------------
 
 
-def check_lora_architecture(st_path: Path) -> tuple[bool, list[str]]:
-    """Check whether the safetensors file contains standard PEFT LoRA weight pairs.
+def read_tensor_keys_sample(st_path: Path, n: int = 10) -> list[str]:
+    """Return the first ``n`` tensor names from the safetensors header, or [] on error.
 
-    Opens the file header only (no tensor data loaded) and counts matched
-    lora_A / lora_B weight pairs.
-
-    Returns
-    -------
-    (is_supported, tensor_keys_sample)
-        is_supported      True if ≥ _MIN_LORA_PAIRS matched pairs found.
-        tensor_keys_sample First 10 tensor key names for diagnostics.
+    Header only; no tensor data is loaded. Used for diagnostics of adapters the
+    scanner could not analyse.
     """
     from safetensors import safe_open
 
-    with safe_open(str(st_path), framework="numpy") as f:
-        keys = list(f.keys())
-
-    keys_sample = keys[:10]
-    a_layers: set[str] = set()
-    b_layers: set[str] = set()
-
-    for k in keys:
-        m = _LORA_A_RE.match(k)
-        if m:
-            a_layers.add(m.group(1))
-            continue
-        m = _LORA_B_RE.match(k)
-        if m:
-            b_layers.add(m.group(1))
-
-    paired = a_layers & b_layers
-    return len(paired) >= _MIN_LORA_PAIRS, keys_sample
-
-
-# ---------------------------------------------------------------------------
-# Atomic per-repo scanner (architecture check → M1 → result)
-# ---------------------------------------------------------------------------
+    try:
+        with safe_open(str(st_path), framework="numpy") as f:
+            return list(f.keys())[:n]
+    except Exception:  # noqa: BLE001 — diagnostics only
+        return []
 
 
 def scan_one_adapter(
     candidate: CandidateRepo,
     st_path: Path,
-    adapter_config: dict[str, Any],
+    mode: str = "full",
 ) -> ScanResult:
-    """Run architecture check then M1 analysis. Never raises.
+    """Run the M1 scan and flatten it into a benchmark record. Never raises.
 
-    All exceptions are caught and converted into a ScanResult with the
-    appropriate status field.
+    A failed scan whose error reports no LoRA A/B pair is recorded as
+    ``unsupported_architecture``; any other failed scan, or an exception, as
+    ``analysis_failed``.
     """
     ts = datetime.now(timezone.utc).isoformat()
     size: int | None = st_path.stat().st_size if st_path.exists() else None
 
-    # Step 1 — architecture check
     try:
-        is_supported, keys_sample = check_lora_architecture(st_path)
-    except Exception as exc:
+        m1_result = run_m1(st_path, mode=mode, repo_id=candidate.repo_id,
+                           revision=candidate.revision)
+    except Exception as exc:  # noqa: BLE001 — scanner never raises; guard anyway
         return ScanResult(
             repo_id=candidate.repo_id,
             scan_timestamp=ts,
@@ -231,36 +216,36 @@ def scan_one_adapter(
             adapter_size_bytes=size,
         )
 
-    if not is_supported:
+    if m1_result.status == "failed":
+        message = m1_result.errors[0].message if m1_result.errors else "scan failed"
+        if _NO_LORA_PAIR_MARKER in message.lower():
+            return ScanResult(
+                repo_id=candidate.repo_id,
+                scan_timestamp=ts,
+                status="unsupported_architecture",
+                scan_status="failed",
+                error_type="no_lora_pairs_found",
+                error_detail=message[:200],
+                tensor_keys_sample=read_tensor_keys_sample(st_path),
+                hf_downloads=candidate.hf_downloads,
+                hf_tags=candidate.hf_tags,
+                adapter_size_bytes=size,
+            )
+        detail = m1_result.errors[0].detail if m1_result.errors else None
         return ScanResult(
             repo_id=candidate.repo_id,
             scan_timestamp=ts,
-            status="unsupported_architecture",
-            training_status="UNSUPPORTED",
-            risk_level="UNKNOWN",
-            error_type="no_lora_pairs_found",
-            tensor_keys_sample=keys_sample,
+            status="analysis_failed",
+            scan_status="failed",
+            error_type=detail or (m1_result.errors[0].code if m1_result.errors else "ScanFailed"),
+            error_detail=message[:200],
+            error_message=message[:400],
             hf_downloads=candidate.hf_downloads,
             hf_tags=candidate.hf_tags,
             adapter_size_bytes=size,
         )
 
-    # Step 2 — M1 analysis
-    try:
-        m1_report = run_m1(st_path, adapter_config)
-        return _extract_result(candidate, st_path, adapter_config, m1_report)
-    except Exception as exc:
-        return ScanResult(
-            repo_id=candidate.repo_id,
-            scan_timestamp=ts,
-            status="analysis_failed",
-            error_type=type(exc).__name__,
-            error_detail=str(exc)[:200],
-            error_message=str(exc)[:400],
-            hf_downloads=candidate.hf_downloads,
-            hf_tags=candidate.hf_tags,
-            adapter_size_bytes=size,
-        )
+    return _extract_result(candidate, st_path, m1_result)
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +258,7 @@ def _process_repo(
     adapters_dir: Path,
     max_size_mb: float,
     local_only: bool,
+    mode: str = "full",
 ) -> ScanResult:
     """Full pipeline for one repo — safe to call from a thread pool.
 
@@ -292,16 +278,17 @@ def _process_repo(
                 hf_downloads=candidate.hf_downloads,
                 hf_tags=candidate.hf_tags,
             )
-        adapter_config = _load_local_config(adapters_dir / safe_name / _CONFIG_FILE)
-        return scan_one_adapter(candidate, st_path, adapter_config)
+        return scan_one_adapter(candidate, st_path, mode=mode)
 
     # Network mode: download then scan
     try:
-        st_path, adapter_config = download_adapter(
+        # adapter_config.json is saved next to the adapter; the scanner reads it there.
+        st_path, _config = download_adapter(
             repo_id=candidate.repo_id,
             adapters_dir=adapters_dir,
             max_size_mb=max_size_mb,
             fetch_config=True,
+            revision=candidate.revision,
         )
     except ValueError as exc:
         return ScanResult(
@@ -326,7 +313,7 @@ def _process_repo(
             adapter_size_bytes=candidate.adapter_size_bytes,
         )
 
-    return scan_one_adapter(candidate, st_path, adapter_config)
+    return scan_one_adapter(candidate, st_path, mode=mode)
 
 
 def _load_local_config(config_path: Path) -> dict[str, Any]:
@@ -368,11 +355,11 @@ class _ProgressTracker:
             eta_s = remaining / rate if rate > 0 else 0
             eta_fmt = f"~{int(eta_s // 60)}m{int(eta_s % 60):02d}s"
 
-        ens_str = f"{result.ensemble_score:.1f}" if result.ensemble_score is not None else "—"
-        level = result.ensemble_risk_level or result.status
+        z_str = f"{result.max_robust_z:.1f}" if result.max_robust_z is not None else "—"
+        verdict = f"{result.action}/{result.level}" if result.action else result.status
         logger.info(
-            "[%d/%d] %s  ens=%s [%s]  ETA %s",
-            n, self.total, result.repo_id, ens_str, level, eta_fmt,
+            "[%d/%d] %s  max_z=%s [%s]  ETA %s",
+            n, self.total, result.repo_id, z_str, verdict, eta_fmt,
         )
 
 
@@ -450,7 +437,8 @@ def _discover(
                 filter="peft",
                 sort="downloads",
                 limit=oversample,
-                expand=["siblings"],
+                # With expand, only the listed properties are returned.
+                expand=["siblings", "sha", "downloads", "tags"],
             )
         )
     except Exception as exc:
@@ -474,6 +462,7 @@ def _discover(
             "has_config": _CONFIG_FILE in file_names,
             "downloads": downloads,
             "tags": list(getattr(model, "tags", None) or []),
+            "sha": getattr(model, "sha", None),
         })
 
     logger.info(
@@ -508,6 +497,7 @@ def _discover(
             hf_tags=entry["tags"],
             adapter_size_bytes=adapter_size,
             has_adapter_config=entry["has_config"],
+            revision=entry["sha"],
         ))
 
         if (i + 1) % 100 == 0 or len(candidates) % 100 == 0:
@@ -526,8 +516,12 @@ def download_adapter(
     adapters_dir: Path,
     max_size_mb: float,
     fetch_config: bool = True,
+    revision: str | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     """Download adapter_model.safetensors with transparent caching.
+
+    ``revision`` pins the download to the commit recorded at discovery time
+    (None = the default branch head).
 
     Raises ValueError if size exceeds limit; RuntimeError on download failure.
     """
@@ -560,6 +554,7 @@ def download_adapter(
             repo_id=repo_id,
             filename=_ADAPTER_FILE,
             local_dir=str(local_dir),
+            revision=revision,
         )
         st_path = Path(downloaded).resolve()
     except Exception as exc:
@@ -574,6 +569,7 @@ def download_adapter(
                     repo_id=repo_id,
                     filename=_CONFIG_FILE,
                     local_dir=str(local_dir),
+                    revision=revision,
                 )
             except Exception:
                 pass
@@ -583,41 +579,36 @@ def download_adapter(
 
 
 # ---------------------------------------------------------------------------
-# M1 runner (unchanged from v1 — no M1 logic modifications)
+# M1 runner
 # ---------------------------------------------------------------------------
 
 
-def run_m1(st_path: Path, adapter_config: dict[str, Any]) -> dict[str, Any]:
-    """Run AdapterSentry M1 static analysis. Does not catch exceptions."""
-    from adaptersentry.analyzer import analyze
+def run_m1(
+    st_path: Path,
+    mode: str = "full",
+    repo_id: str | None = None,
+    revision: str | None = None,
+) -> "M1ScanResult":
+    """Run the AdapterSentry M1 scan (never raises by contract; failures are in ``status``).
 
-    claimed_rank: int | None = None
-    if "r" in adapter_config:
-        try:
-            claimed_rank = int(adapter_config["r"])
-        except (TypeError, ValueError):
-            pass
+    ``adapter_config.json`` is read by the scanner from the adapter's directory.
+    """
+    from adaptersentry.scanner import scan
 
-    return analyze(st_path, claimed_rank=claimed_rank)
+    return scan(st_path, mode=mode, hf_repo_id=repo_id, hf_revision=revision)
+
+
+def _format_finding(rule_id: str, title: str) -> str:
+    return f"{rule_id}: {title}"[:_MAX_FINDING_CHARS]
 
 
 def _extract_result(
     candidate: CandidateRepo,
     st_path: Path,
-    adapter_config: dict[str, Any],
-    m1_report: dict[str, Any],
+    m1_result: "M1ScanResult",
 ) -> ScanResult:
-    """Flatten M1 report + candidate metadata into a successful ScanResult."""
-    w2_dict = m1_report.get("wasserstein_distances") or {}
-    w2_mean = float(w2_dict.get("_mean") or 0.0)
-
-    claimed_rank: int | None = None
-    if "r" in adapter_config:
-        try:
-            claimed_rank = int(adapter_config["r"])
-        except (TypeError, ValueError):
-            pass
-
+    """Flatten a non-failed ScanResult 2.0.0 + candidate metadata into a benchmark record."""
+    intra = m1_result.anomaly.intra
     return ScanResult(
         repo_id=candidate.repo_id,
         scan_timestamp=datetime.now(timezone.utc).isoformat(),
@@ -625,18 +616,19 @@ def _extract_result(
         hf_downloads=candidate.hf_downloads,
         hf_tags=candidate.hf_tags,
         adapter_size_bytes=st_path.stat().st_size,
-        training_status=m1_report.get("training_status"),
-        overall_risk=m1_report.get("overall_risk"),
-        risk_level=m1_report.get("risk_level"),
-        ensemble_score=m1_report.get("ensemble_score"),
-        ensemble_risk_level=m1_report.get("ensemble_risk_level"),
-        false_positive_suppressed=m1_report.get("false_positive_suppressed", 0),
-        n_flags=len(m1_report.get("flags") or []),
-        top_flags=[f[:120] for f in (m1_report.get("flags") or [])[:5]],
-        cross_layer_consistency=m1_report.get("cross_layer_consistency"),
-        wasserstein_mean=w2_mean,
-        claimed_rank=claimed_rank,
-        n_layers=len(m1_report.get("layers") or {}),
+        scan_status=m1_result.status,
+        action=m1_result.verdict.action,
+        level=m1_result.verdict.level.value,
+        training_state=m1_result.adapter.training_state,
+        max_robust_z=intra.max_robust_z if intra is not None else None,
+        n_outlier_modules=intra.n_outlier_modules if intra is not None else None,
+        reason_codes=[r.code for r in m1_result.verdict.reasons],
+        n_findings=len(m1_result.findings),
+        top_findings=[
+            _format_finding(f.rule_id, f.title) for f in m1_result.findings[:_MAX_TOP_FINDINGS]
+        ],
+        rank_declared=m1_result.adapter.rank_declared,
+        n_modules=m1_result.coverage.n_modules,
     )
 
 
@@ -701,6 +693,7 @@ def run_pipeline(
     workers: int = 1,
     local_only: bool = False,
     candidates_from: Path | None = None,
+    mode: str = "full",
 ) -> None:
     """Main benchmark pipeline — discover/load candidates, scan, report."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -754,12 +747,13 @@ def run_pipeline(
             _run_parallel(
                 to_process, adapters_dir, max_download_mb, local_only,
                 sleep_seconds, results_path, write_lock, progress,
-                workers=workers,
+                workers=workers, mode=mode,
             )
         else:
             _run_sequential(
                 to_process, adapters_dir, max_download_mb, local_only,
                 sleep_seconds, results_path, write_lock, progress,
+                mode=mode,
             )
 
     # ── Final reports ────────────────────────────────────────────────────────
@@ -789,11 +783,12 @@ def _run_sequential(
     results_path: Path,
     write_lock: threading.Lock,
     progress: _ProgressTracker,
+    mode: str = "full",
 ) -> None:
     for i, candidate in enumerate(to_process):
         if i > 0 and sleep_seconds > 0 and not local_only:
             time.sleep(sleep_seconds)
-        result = _process_repo(candidate, adapters_dir, max_download_mb, local_only)
+        result = _process_repo(candidate, adapters_dir, max_download_mb, local_only, mode)
         append_result(result, results_path, write_lock)
         progress.record(result)
 
@@ -808,6 +803,7 @@ def _run_parallel(
     write_lock: threading.Lock,
     progress: _ProgressTracker,
     workers: int,
+    mode: str = "full",
 ) -> None:
     """Submit all repos to a thread pool; collect and persist results as they complete."""
     if workers > 1 and sleep_seconds > 0 and not local_only:
@@ -823,7 +819,7 @@ def _run_parallel(
         for i, candidate in enumerate(to_process):
             if i > 0 and sleep_seconds > 0 and not local_only:
                 time.sleep(sleep_seconds / workers)
-            fut = pool.submit(_process_repo, candidate, adapters_dir, max_download_mb, local_only)
+            fut = pool.submit(_process_repo, candidate, adapters_dir, max_download_mb, local_only, mode)
             futures[fut] = candidate
 
         for fut in as_completed(futures):
@@ -842,8 +838,9 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="adaptersentry-bench",
         description=(
             "AdapterSentry M1 — large-scale HuggingFace Hub observational benchmark.\n\n"
-            "NOTE: This is not a malware classifier. High scores flag adapters for\n"
-            "manual review; they do not confirm malicious content."
+            "NOTE: This is not a malware classifier. A 'review' verdict or a high\n"
+            "intra-adapter z flags adapters for manual review; it does not confirm\n"
+            "malicious content."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -897,6 +894,10 @@ def _build_parser() -> argparse.ArgumentParser:
              "Adapter files are resolved relative to this file's parent directory.",
     )
     p.add_argument(
+        "--mode", choices=("full", "fast"), default="full",
+        help="M1 scan mode (default: full)",
+    )
+    p.add_argument(
         "--verbose", action="store_true",
         help="Enable DEBUG logging",
     )
@@ -929,6 +930,7 @@ def main() -> None:
         workers=args.workers,
         local_only=args.local_only,
         candidates_from=args.candidates_from,
+        mode=args.mode,
     )
 
 

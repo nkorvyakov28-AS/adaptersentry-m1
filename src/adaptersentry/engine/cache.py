@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import io
 import json
 import logging
 import sqlite3
@@ -39,6 +40,9 @@ from typing import Any, Generator
 from adaptersentry.engine.schemas.cache import CacheEntry
 
 logger = logging.getLogger(__name__)
+
+# Upper bound on a decompressed cached ScanResult.
+_MAX_RESULT_BYTES = 64 * 1024 * 1024
 
 _INDEX_SCHEMA = """
 CREATE TABLE IF NOT EXISTS cache_index (
@@ -152,12 +156,20 @@ class CacheStore:
             return None
 
         obj_path = self._objects / entry.result_path
-        if not obj_path.exists():
+        objects_root = self._objects.resolve()
+        resolved = obj_path.resolve()
+        # The index is a file on disk: a crafted result_path must not lead outside
+        # the object store (path traversal) or to a FIFO/device.
+        if objects_root not in resolved.parents:
+            logger.error("Cache entry path escapes the object store: %r — deleting", entry.result_path)
+            self._delete_entry(entry)
+            return None
+        if not resolved.is_file():
             logger.warning("Cache object missing: %s — deleting index entry", obj_path)
             self._delete_entry(entry)
             return None
 
-        compressed = obj_path.read_bytes()
+        compressed = resolved.read_bytes()
         actual_hash = "sha256:" + hashlib.sha256(compressed).hexdigest()
 
         if actual_hash != entry.result_hash:
@@ -169,7 +181,14 @@ class CacheStore:
             self._delete_entry(entry)
             return None
 
-        return gzip.decompress(compressed)
+        # Bounded decompression: a planted gzip bomb must not exhaust memory.
+        with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as gz:
+            data = gz.read(_MAX_RESULT_BYTES + 1)
+        if len(data) > _MAX_RESULT_BYTES:
+            logger.error("Cache object for scan_id=%s exceeds %d bytes — deleting", entry.scan_id, _MAX_RESULT_BYTES)
+            self._delete_entry(entry)
+            return None
+        return data
 
     # ── Write operations ─────────────────────────────────────────────────────
 

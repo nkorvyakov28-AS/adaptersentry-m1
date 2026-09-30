@@ -1,63 +1,44 @@
 # Contributing to AdapterSentry
 
-## Development setup
+## Setup
 
 ```bash
-git clone https://github.com/nkorvyakov28-AS/adaptersentry
-cd adaptersentry
-pip install -e ".[dev]"
-
-# Optional: Rust hot-path extensions (requires Rust toolchain)
-pip install maturin
-cd adaptersentry-rs
-VIRTUAL_ENV=$(python -c "import sys; print(sys.prefix)") maturin develop --release
-cd ..
+git clone https://github.com/nkorvyakov28-AS/adaptersentry-m1
+cd adaptersentry-m1
+uv sync --frozen --extra dev          # or: pip install -e ".[dev]"
+pytest tests/ -q
 ```
 
-## Running tests
+The full suite must pass before a PR is merged.
 
-```bash
-pytest tests/ -q                      # full suite (773 tests)
-pytest tests/test_analyzer.py -v      # single file
-```
+## Where to start
 
-All 773 tests must pass before submitting a PR.
+- [docs/architecture/overview.md](docs/architecture/overview.md) — how a scan works
+- [docs/guides/development.md](docs/guides/development.md) — where changes go, security
+  invariants, conventions
+- [docs/guides/testing.md](docs/guides/testing.md) — test layout and rules
 
-## Code conventions
+## Rules
 
-- Python 3.11+; all public functions have type hints and docstrings.
-- No `print()` — use `logging` for diagnostics, reporters for output.
-- No hardcoded paths — use `pathlib.Path`.
-- Security review required for any code that touches file I/O or external data:
-  see `SECURITY.md` for the checklist.
+- Python 3.11+; type hints and docstrings on public functions; `pathlib.Path`; `logging`
+  instead of `print()`.
+- Treat everything in an adapter file as hostile: validate before allocating, never
+  deserialise pickle or evaluate content from the file.
+- Failures must be fail-closed: a scan that could not complete is never `allow`.
+- Tests use synthetic adapters written with `safetensors.numpy` (`tests/adapter_factory.py`);
+  no torch, no committed weight files.
+- Do not claim detection accuracy that has not been measured; label uncalibrated thresholds
+  as such.
+- Changes to `ScanResult` follow the schema rules in the development guide.
 
-## Adding a detector
+## Commits
 
-1. Create `src/adaptersentry/detectors/my_detector.py`.
-2. Export from `src/adaptersentry/detectors/__init__.py`.
-3. Wire through `engine/feature_extractor.py` (`FeatureExtractor.extract_layer()`) and
-   `EnsembleDetector.score_families()` — do **not** add logic to the legacy
-   `analyzer._run_analysis()` flat-dict path.
-4. Add weight to `scoring/risk_scorer.py` `DEFAULT_WEIGHTS`.
-5. Add a test in `tests/test_detectors.py`.
-
-## Batch backend
-
-The batch engine supports two backends selectable via `--backend`:
-
-- `mp` — multiprocessing pool (default, single-machine)
-- `ray` — Ray actor pool (`--backend ray`); enables crash isolation and horizontal scaling
-
-Run benchmarks with `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1` to
-avoid BLAS thread over-subscription on multi-worker runs.
-
-## Commit style
-
-Conventional commits: `feat:`, `fix:`, `perf:`, `refactor:`, `test:`, `docs:`, `chore:`, `bench:`.
-Scoped variants are fine where helpful (e.g. `fix(cli):`, `test(schemas):`).
-One logical change per commit; messages describe **why**, not what (the diff shows what).
+Conventional commits: `feat:`, `fix:`, `perf:`, `refactor:`, `test:`, `docs:`, `chore:`,
+`bench:` (scopes such as `fix(cli):` are fine). One logical change per commit; the message
+explains **why** — the diff shows what.
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) for the responsible disclosure process.
-Do not open public issues for vulnerabilities in AdapterSentry itself.
+Report vulnerabilities in AdapterSentry privately, as described in [SECURITY.md](SECURITY.md);
+do not open public issues for them. A malicious adapter found in the wild can be reported as a
+GitHub issue labelled `malicious-adapter`.

@@ -1,14 +1,31 @@
-"""AdapterSentry — static security scanner for LoRA adapters.
+"""AdapterSentry M1 — static security scanner for LoRA adapters.
 
 Quick start
 -----------
->>> from adaptersentry import analyze, scan
->>> report_dict = analyze(Path("adapter.safetensors"))   # legacy dict API
->>> report = scan(Path("adapter.safetensors"))           # typed AdapterReport API
->>> print(report.risk_summary.ensemble_risk_level)
+>>> from pathlib import Path
+>>> from adaptersentry import scan
+>>> result = scan(Path("adapter_model.safetensors"))
+>>> result.verdict.action          # "allow" | "review" | "block"
 """
 
-from adaptersentry.version import __version__
-from adaptersentry.analyzer import analyze, load_adapter, scan, scan_to_result
+from typing import TYPE_CHECKING, Any
 
-__all__ = ["analyze", "load_adapter", "scan", "scan_to_result", "__version__"]
+from adaptersentry.version import __version__
+
+if TYPE_CHECKING:
+    from adaptersentry.scanner import scan
+    from adaptersentry.schemas.result import ScanResult, load_scan_result
+
+__all__ = ["ScanResult", "__version__", "load_scan_result", "scan"]
+
+
+def __getattr__(name: str) -> Any:
+    # Lazy: importing the package must not import numpy, so the CLI and batch
+    # workers can pin BLAS to one thread before numpy loads.
+    if name == "scan":
+        from adaptersentry.scanner import scan
+        return scan
+    if name in ("ScanResult", "load_scan_result"):
+        from adaptersentry.schemas import result
+        return getattr(result, name)
+    raise AttributeError(f"module 'adaptersentry' has no attribute {name!r}")
