@@ -9,7 +9,7 @@ uv sync --frozen --extra dev          # or: pip install -e ".[dev]"
 pytest tests/ -q
 ```
 
-The full suite must pass before a PR is merged. No Rust toolchain is needed.
+The full suite must pass before a PR is merged.
 
 ## Where to start
 

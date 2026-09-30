@@ -60,6 +60,8 @@ loaded into memory (~3.3 GB for a 70B adapter).
 - 1.x detectors and scores: IsolationForest, z-score, entropy, Wasserstein, cross-layer
   consistency, init-only suppression, the additive rule score and the sigmoid ensemble,
   ScoreBreakdown and ConfidenceScore.
+- The optional Rust extension (`adaptersentry-rs`). It accelerated 1.x statistics that 2.0 no
+  longer computes; the 2.0 hot paths already run in BLAS/numpy.
 
 ### Known limitations
 
