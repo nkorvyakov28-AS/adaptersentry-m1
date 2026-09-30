@@ -3,7 +3,7 @@
 All notable changes to AdapterSentry are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
-## [2.0.0] — unreleased
+## [2.0.0] — 2026-09-30
 
 A new analysis engine and result contract. 1.x results are not compatible; re-scan adapters.
 
