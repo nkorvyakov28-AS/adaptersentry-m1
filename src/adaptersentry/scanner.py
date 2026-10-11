@@ -322,7 +322,8 @@ def _scan_inventory(path, inv: AdapterInventory, cfg_read, siblings, artifact, s
         idx = len(records)
         records.append(ModuleRecord(**base_record, scale=res.scale, status="ok", features=feats, heads=heads))
         entries.append(ModuleEntry(index=idx, module=loc.module, kind=loc.kind, layer=loc.layer,
-                                   expert=loc.expert, features=feats, energy=core.fro ** 2))
+                                   expert=loc.expert, features=feats, energy=core.fro ** 2,
+                                   stack=loc.stack))
         del pd
 
     intra = compare_within_adapter(entries)

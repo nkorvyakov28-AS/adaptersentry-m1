@@ -20,6 +20,7 @@ _EMB_B = re.compile(r"^(?P<base>.+)\.lora_embedding_B(?:\.[A-Za-z0-9_\-]+)?$")
 _DORA = re.compile(r"^(?P<base>.+)\.lora_magnitude_vector(?:\.[A-Za-z0-9_\-]+)?(?:\.weight)?$")
 _TRAINABLE_TOKENS = re.compile(r"^(?P<base>.+)\.trainable_tokens_(?:delta|original)(?:\.[A-Za-z0-9_\-]+)?$")
 
+_PEFT_PREFIX = "base_model.model."
 _LAYER = re.compile(r"(?:^|\.)(?:layers|h|blocks|layer)\.(\d+)(?:\.|$)")
 _EXPERT = re.compile(r"(?:^|\.)experts\.(\d+)(?:\.|$)")
 
@@ -57,6 +58,10 @@ class ModuleLocation:
     expert: int | None
     module: str
     kind: ModuleKind
+    # Path of the layer stack the module belongs to, e.g. "model.language_model" or
+    # "model.vision_tower.vision_model.encoder"; "" when the path has no layer index.
+    # Multimodal models reuse module names (q_proj, up_proj) across stacks.
+    stack: str = ""
 
 
 def parse_key(key: str) -> ParsedKey:
@@ -98,9 +103,15 @@ def locate(base: str) -> ModuleLocation:
         kind = "router"
     else:
         kind = "other"
+    stack = ""
+    if layer_m:
+        stack = base[:layer_m.start()]
+        if stack.startswith(_PEFT_PREFIX):
+            stack = stack[len(_PEFT_PREFIX):]
     return ModuleLocation(
         layer=int(layer_m.group(1)) if layer_m else None,
         expert=int(expert_m.group(1)) if expert_m else None,
         module=name,
         kind=kind,
+        stack=stack,
     )

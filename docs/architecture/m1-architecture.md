@@ -77,7 +77,9 @@ Memory is bounded by one pair plus ~15 MB for the kurtosis row chunks.
 ## 5. Intra-adapter comparison
 
 Modules of the same kind should look alike across layers, apart from a smooth trend with
-depth. For every family with **≥ 16 modules** and every feature:
+depth. A family is one module name within one layer stack: multimodal models reuse names
+(`q_proj`, `up_proj`) in the vision tower and the language model, and those are compared
+separately. For every family with **≥ 16 modules** and every feature:
 
 1. remove the depth trend with a Theil–Sen line (median of pairwise slopes — robust to the
    outliers being looked for);
