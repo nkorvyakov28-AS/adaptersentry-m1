@@ -6,11 +6,12 @@ import numpy as np
 import pytest
 
 from adaptersentry.detectors.intra_adapter import (
+    CONCENTRATION_REVIEW_Z,
     MIN_FAMILY,
     OUTLIER_Z,
-    REVIEW_Z,
     ModuleEntry,
     compare_within_adapter,
+    concentration_z,
     detrend,
     robust_z,
 )
@@ -26,6 +27,7 @@ def _adapter_entries(
     d: int = 512,
     k: int = 384,
     r: int = 8,
+    boost_layer: int | None = None,
 ) -> list[ModuleEntry]:
     """Realistic-looking synthetic adapter: two families, smooth growth with depth."""
     rng = np.random.default_rng(seed)
@@ -41,6 +43,8 @@ def _adapter_entries(
                 spike = np.zeros(d, np.float32)
                 spike[rng.choice(d, 6, replace=False)] = 0.25 * growth
                 b[:, -1] = spike  # one rank slot writes into 6 outputs only
+            if module == "down_proj" and layer == boost_layer:
+                b = b * 20.0  # much stronger, but not shaped differently
             feats, core = module_features(a, b, 2.0)
             entries.append(ModuleEntry(
                 index=idx, module=module, kind=kind, layer=layer, expert=None,
@@ -71,33 +75,53 @@ class TestHelpers:
         assert abs(res[0]) < 1e-9 and res[6] == pytest.approx(0.35, abs=1e-9)
 
 
+class TestConcentrationZ:
+    def test_smallest_of_the_three(self) -> None:
+        assert concentration_z({"kurt_dw": 30.0, "row_top8": 20.0, "row_hoyer": 16.0, "log_rms": 99.0}) == 16.0
+
+    def test_one_feature_falling_keeps_it_low(self) -> None:
+        assert concentration_z({"kurt_dw": 40.0, "row_top8": 40.0, "row_hoyer": -3.0}) == -3.0
+
+    def test_missing_feature(self) -> None:
+        assert concentration_z({"kurt_dw": 40.0, "row_top8": 40.0}) is None
+
+
 class TestComparison:
     def test_clean_adapter_does_not_reach_review(self) -> None:
         for seed in range(3):
             result = compare_within_adapter(_adapter_entries(seed=seed))
             assert result is not None
-            assert result.summary.max_robust_z < REVIEW_Z, seed
+            assert result.summary.max_concentration_z < CONCENTRATION_REVIEW_Z, seed
+            assert result.summary.concentration_spikes == []
 
     def test_injected_layer_is_found(self) -> None:
         result = compare_within_adapter(_adapter_entries(inject_layer=13))
         assert result is not None
-        assert result.summary.max_robust_z >= REVIEW_Z
-        top = result.summary.depth_spikes[0]
+        assert result.summary.max_concentration_z >= CONCENTRATION_REVIEW_Z
+        top = result.summary.concentration_spikes[0]
         assert (top.module_type, top.layer) == ("down_proj", 13)
         assert result.top_contributors[0].layer == 13
+
+    def test_single_feature_outlier_does_not_reach_review(self) -> None:
+        # A module 20x stronger than its family is a huge log_rms outlier, but its update
+        # is not concentrated: real adapters have such modules routinely.
+        result = compare_within_adapter(_adapter_entries(boost_layer=10))
+        assert result is not None
+        assert result.summary.max_robust_z > 20
+        assert result.summary.max_concentration_z < CONCENTRATION_REVIEW_Z
 
     def test_depth_trend_alone_is_not_an_outlier(self) -> None:
         # Strong smooth growth with depth: detrending must absorb it.
         result = compare_within_adapter(_adapter_entries(n_layers=40, seed=5))
         assert result is not None
-        assert all(abs(s.z) < REVIEW_Z for s in result.summary.depth_spikes)
+        assert result.summary.max_concentration_z < CONCENTRATION_REVIEW_Z
 
     def test_per_module_z_recorded(self) -> None:
         entries = _adapter_entries(inject_layer=5)
         result = compare_within_adapter(entries)
         assert result is not None
         target = next(e.index for e in entries if e.module == "down_proj" and e.layer == 5)
-        assert max(abs(v) for v in result.z_by_module[target].values()) >= REVIEW_Z
+        assert concentration_z(result.z_by_module[target]) >= CONCENTRATION_REVIEW_Z
 
     def test_summary_fields(self) -> None:
         result = compare_within_adapter(_adapter_entries())

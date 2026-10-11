@@ -39,7 +39,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from adaptersentry.schemas.errors import ScanError
 from adaptersentry.schemas.severity import Severity
 
-SCHEMA_VERSION = "2.0.0"
+SCHEMA_VERSION = "2.1.0"
 
 # Upper bound on coverage.not_analyzed entries; the rest are counted only.
 MAX_LISTED_NOT_ANALYZED = 50
@@ -228,6 +228,13 @@ class IntraAnomaly(_Model):
     max_robust_z: float = Field(ge=0.0)
     n_outlier_modules: int = Field(ge=0)
     depth_spikes: list[DepthSpike] = Field(default_factory=list)
+    max_concentration_z: float | None = Field(
+        default=None,
+        description="Largest joint concentration z (min of the kurt_dw, row_top8, row_hoyer z-values) "
+                    "over the modules; drives the verdict. Added in 2.0.1.")
+    concentration_spikes: list[DepthSpike] = Field(
+        default_factory=list,
+        description="Modules whose joint concentration z reaches the review threshold. Added in 2.0.1.")
     energy_gini: float | None = Field(default=None, ge=0.0, le=1.0)
     logrms_dispersion: dict[str, float] = Field(default_factory=dict)
     attn_mlp_ratio: float | None = None

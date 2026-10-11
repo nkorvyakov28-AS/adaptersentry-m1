@@ -1,4 +1,4 @@
-"""Batch worker: one adapter → one ScanResult 2.0.0.
+"""Batch worker: one adapter → one ScanResult 2.x.
 
 ``worker_main`` runs in a worker process (multiprocessing or Ray). It checks the
 content-addressed cache first and otherwise calls ``adaptersentry.scanner.scan``.

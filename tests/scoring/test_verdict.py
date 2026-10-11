@@ -32,13 +32,20 @@ def test_reference_review_and_allow() -> None:
 
 
 def test_intra_below_threshold_allows() -> None:
-    intra = IntraAnomaly(max_robust_z=5.0, n_outlier_modules=1)
+    intra = IntraAnomaly(max_robust_z=5.0, n_outlier_modules=1, max_concentration_z=4.0)
     assert _v(intra=intra).action == "allow"
 
 
-def test_intra_above_threshold_reviews_with_location() -> None:
-    intra = IntraAnomaly(max_robust_z=12.0, n_outlier_modules=1,
-                         depth_spikes=[DepthSpike(module_type="down_proj", layer=47, z=12.0)])
+def test_single_feature_outlier_alone_allows() -> None:
+    # Large single-feature z-values are common in benign adapters (2.0.1 calibration).
+    intra = IntraAnomaly(max_robust_z=60.0, n_outlier_modules=12, max_concentration_z=6.0,
+                         depth_spikes=[DepthSpike(module_type="down_proj", layer=3, z=60.0)])
+    assert _v(intra=intra).action == "allow"
+
+
+def test_concentration_above_threshold_reviews_with_location() -> None:
+    intra = IntraAnomaly(max_robust_z=30.0, n_outlier_modules=1, max_concentration_z=21.0,
+                         concentration_spikes=[DepthSpike(module_type="down_proj", layer=47, z=21.0)])
     v = _v(intra=intra)
     assert v.action == "review" and "layer 47" in next(r.message for r in v.reasons if r.code == "INTRA_OUTLIER")
 

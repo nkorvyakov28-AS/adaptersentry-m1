@@ -1,6 +1,6 @@
 """CombinedReport — M1 + M2 unified verdict.
 
-schema_version = "2.0.0" — embeds ScanResult 2.0.0 (m1). BehavioralResult /
+schema_version = "2.0.0" — embeds ScanResult 2.x (m1). BehavioralResult /
 ProbeResult keep their own 1.0.0 wire format.
 
 M1-only scans populate the m1 field only; the m2 field defaults to

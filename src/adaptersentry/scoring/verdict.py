@@ -15,7 +15,7 @@ bug here cannot produce an "allow" for a degraded scan.
 
 from __future__ import annotations
 
-from adaptersentry.detectors.intra_adapter import REVIEW_Z
+from adaptersentry.detectors.intra_adapter import CONCENTRATION_REVIEW_Z
 from adaptersentry.schemas.severity import Severity
 from adaptersentry.schemas.result import (
     Confidence,
@@ -75,13 +75,17 @@ def derive_verdict(
                               message="No calibrated reference for this model family; "
                                       "verdict relies on intra-adapter comparison"))
 
-    if intra is not None and intra.max_robust_z >= REVIEW_Z:
+    if (intra is not None and intra.max_concentration_z is not None
+            and intra.max_concentration_z >= CONCENTRATION_REVIEW_Z):
         where = ""
-        if intra.depth_spikes:
-            top = intra.depth_spikes[0]
-            where = f": {top.module_type} layer {top.layer}, robust z = {top.z:.1f}"
-        reasons.append(Reason(code="INTRA_OUTLIER", severity=Severity.MEDIUM,
-                              message=f"Module departs from its family{where} (threshold {REVIEW_Z}, uncalibrated)"))
+        if intra.concentration_spikes:
+            top = intra.concentration_spikes[0]
+            where = f" ({top.module_type} layer {top.layer})"
+        reasons.append(Reason(
+            code="INTRA_OUTLIER", severity=Severity.MEDIUM,
+            message=f"Update concentrated on a few outputs, unlike the rest of its family{where}: "
+                    f"concentration z = {intra.max_concentration_z:.1f} ≥ {CONCENTRATION_REVIEW_Z} "
+                    f"(threshold set at 5 % alerts on popular Hub adapters)"))
         raise_to("review")
 
     for flag in red_flags:

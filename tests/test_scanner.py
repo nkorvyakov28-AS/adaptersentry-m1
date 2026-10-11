@@ -59,8 +59,9 @@ class TestDetection:
         result = scan(_write_adapter(tmp_path / "inj", inject_layer=7))
         assert result.verdict.action == "review"
         assert "INTRA_OUTLIER" in {r.code for r in result.verdict.reasons}
-        spike = next(f for f in result.findings if f.rule_id == "INTRA_DEPTH_SPIKE")
+        spike = next(f for f in result.findings if f.rule_id == "INTRA_CONCENTRATION_SPIKE")
         assert spike.locations[0].layer == 7 and spike.locations[0].module == "down_proj"
+        assert spike.evidence["concentration_z"] >= 14.0
 
     def test_rescale_attack_does_not_hide_the_update(self, tmp_path: Path) -> None:
         # B shrunk by 1e4 and lora_alpha raised by 1e4: effective ΔW is unchanged.
@@ -71,6 +72,8 @@ class TestDetection:
         ))
         assert attack.verdict.action == "review"
         assert attack.anomaly.intra.max_robust_z == pytest.approx(normal.anomaly.intra.max_robust_z, rel=1e-3)
+        assert attack.anomaly.intra.max_concentration_z == pytest.approx(
+            normal.anomaly.intra.max_concentration_z, rel=1e-3)
 
     def test_init_only_adapter(self, tmp_path: Path) -> None:
         result = scan(_write_adapter(tmp_path / "init", b_scale=0.0))

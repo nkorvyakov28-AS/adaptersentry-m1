@@ -1,4 +1,4 @@
-"""AdapterSentry M1 scan pipeline — produces a ScanResult 2.0.0.
+"""AdapterSentry M1 scan pipeline — produces a ScanResult 2.x.
 
     scan(path) → ScanResult
 
@@ -35,7 +35,14 @@ from typing import Literal
 
 import numpy as np
 
-from adaptersentry.detectors.intra_adapter import OUTLIER_Z, REVIEW_Z, ModuleEntry, compare_within_adapter
+from adaptersentry.detectors.intra_adapter import (
+    CONCENTRATION_FEATURES,
+    CONCENTRATION_REVIEW_Z,
+    OUTLIER_Z,
+    ModuleEntry,
+    compare_within_adapter,
+    concentration_z,
+)
 from adaptersentry.detectors.structural import find_siblings, structural_findings
 from adaptersentry.features.spectral import head_features, module_features
 from adaptersentry.parsers.adapter_config import read_adapter_config, resolve_scale
@@ -77,7 +84,7 @@ def config_hash(mode: Mode, policy: Policy) -> str:
     """Hash of every setting that changes the result (cache key component)."""
     settings = {
         "schema": SCHEMA_VERSION, "mode": mode, "policy": policy,
-        "outlier_z": OUTLIER_Z, "review_z": REVIEW_Z,
+        "outlier_z": OUTLIER_Z, "concentration_review_z": CONCENTRATION_REVIEW_Z,
     }
     blob = json.dumps(settings, sort_keys=True).encode()
     return "sha256:" + hashlib.sha256(blob).hexdigest()
@@ -192,7 +199,7 @@ def scan(
     hf_repo_id: str | None = None,
     hf_revision: str | None = None,
 ) -> ScanResult:
-    """Scan one LoRA adapter file and return a ScanResult 2.0.0. Never raises.
+    """Scan one LoRA adapter file and return a ScanResult 2.x. Never raises.
 
     Args:
         path: .safetensors adapter file.
@@ -330,23 +337,39 @@ def _scan_inventory(path, inv: AdapterInventory, cfg_read, siblings, artifact, s
     findings = list(struct.findings)
     if intra is not None:
         pair_by_index = {i: inv.pairs[i] for i in range(len(inv.pairs))}
+        conc = {idx: c for idx, zs in intra.z_by_module.items()
+                if (c := concentration_z(zs)) is not None and c >= CONCENTRATION_REVIEW_Z}
+        for idx, c in sorted(conc.items(), key=lambda kv: -kv[1])[:10]:
+            rec, pair = records[idx], pair_by_index[idx]
+            zs = intra.z_by_module[idx]
+            findings.append(Finding(
+                rule_id="INTRA_CONCENTRATION_SPIKE", severity=Severity.MEDIUM,
+                title="Update concentrated on a few outputs, unlike its family",
+                message=(f"{rec.module} in layer {rec.layer}: kurtosis, top-8 row share and row Hoyer "
+                         f"all rise against the family (concentration z = {c:.1f} ≥ {CONCENTRATION_REVIEW_Z})"),
+                evidence={"concentration_z": round(c, 3),
+                          **{f"z_{f}": round(zs[f], 3) for f in CONCENTRATION_FEATURES}},
+                locations=[Location(layer=rec.layer, module=rec.module, expert=rec.expert,
+                                    tensor_key=pair.b.key)],
+                remediation="Behavioural check of this adapter",
+            ))
+        # Single-feature outliers: information only. Real adapters have many (see intra_adapter).
         ranked = sorted(intra.z_by_module.items(), key=lambda kv: -max(abs(v) for v in kv[1].values()))
-        for idx, zs in ranked[:10]:
+        for idx, zs in ranked[:5]:
+            if idx in conc:
+                continue
             feat, zval = max(zs.items(), key=lambda kv: abs(kv[1]))
             if abs(zval) <= OUTLIER_Z:
                 break
             rec, pair = records[idx], pair_by_index[idx]
-            strong = abs(zval) >= REVIEW_Z
             findings.append(Finding(
-                rule_id="INTRA_DEPTH_SPIKE" if strong else "INTRA_OUTLIER",
-                severity=Severity.MEDIUM if strong else Severity.LOW,
-                title="Module departs from its family" if strong else "Mild outlier within its family",
+                rule_id="INTRA_OUTLIER", severity=Severity.LOW,
+                title="Module differs from its family in one feature",
                 message=(f"{rec.module} in layer {rec.layer}: {feat} robust z = {zval:.1f} "
-                         f"({'≥' if strong else '<'} review threshold {REVIEW_Z}, uncalibrated)"),
+                         f"(information only; common in benign adapters)"),
                 evidence={"feature": feat, "z": round(zval, 3), "value": getattr(rec.features, feat)},
                 locations=[Location(layer=rec.layer, module=rec.module, expert=rec.expert,
                                     tensor_key=pair.b.key)],
-                remediation="Behavioural check of this adapter" if strong else None,
             ))
     for tc in token_conc:
         findings.append(Finding(

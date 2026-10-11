@@ -100,7 +100,7 @@ class ResultSink:
         """Persist result; update cache and manifest on success.
 
         Args:
-            result:      ScanResult 2.0.0.
+            result:      ScanResult 2.x.
             manifest_db: Manifest to update on completion.
             cache_store: Cache store to write the entry (None = cache disabled).
             request_id:  Manifest row to update.

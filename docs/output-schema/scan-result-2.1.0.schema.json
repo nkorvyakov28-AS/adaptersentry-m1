@@ -38,7 +38,7 @@
         },
         "base_family": {
           "default": "unknown",
-          "description": "llama, qwen, gemma, mistral, … or unknown.",
+          "description": "llama, qwen, gemma, mistral, \u2026 or unknown.",
           "title": "Base Family",
           "type": "string"
         },
@@ -555,6 +555,27 @@
           "title": "Depth Spikes",
           "type": "array"
         },
+        "max_concentration_z": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Largest joint concentration z (min of the kurt_dw, row_top8, row_hoyer z-values) over the modules; drives the verdict. Added in 2.0.1.",
+          "title": "Max Concentration Z"
+        },
+        "concentration_spikes": {
+          "description": "Modules whose joint concentration z reaches the review threshold. Added in 2.0.1.",
+          "items": {
+            "$ref": "#/$defs/DepthSpike"
+          },
+          "title": "Concentration Spikes",
+          "type": "array"
+        },
         "energy_gini": {
           "anyOf": [
             {
@@ -685,7 +706,7 @@
       "type": "object"
     },
     "ModuleFeatures": {
-      "description": "Exact features of the effective update ΔW = s·B·A of one module.",
+      "description": "Exact features of the effective update \u0394W = s\u00b7B\u00b7A of one module.",
       "properties": {
         "log_rms": {
           "anyOf": [
@@ -1099,7 +1120,7 @@
       "description": "Why the verdict is what it is.",
       "properties": {
         "code": {
-          "description": "PARSE_FAILED, DEGRADED_PARSE, NO_REFERENCE_PROFILE, INTRA_OUTLIER, …",
+          "description": "PARSE_FAILED, DEGRADED_PARSE, NO_REFERENCE_PROFILE, INTRA_OUTLIER, \u2026",
           "title": "Code",
           "type": "string"
         },
@@ -1177,7 +1198,7 @@
       "type": "object"
     },
     "ScanError": {
-      "description": "Normalized scan error — goes into AdapterReport.errors / ScanResult.errors.\n\n``code`` is a short upper-case string identifying the error.  Canonical values\nare defined in ``ErrorCode``; callers should treat ``code`` as advisory — future\nversions may emit codes not present in the current ``ErrorCode`` enum.  Always\nbranch on ``category`` for reliable machine processing; use ``code`` only for\nlogging and display.",
+      "description": "Normalized scan error \u2014 goes into AdapterReport.errors / ScanResult.errors.\n\n``code`` is a short upper-case string identifying the error.  Canonical values\nare defined in ``ErrorCode``; callers should treat ``code`` as advisory \u2014 future\nversions may emit codes not present in the current ``ErrorCode`` enum.  Always\nbranch on ``category`` for reliable machine processing; use ``code`` only for\nlogging and display.",
       "properties": {
         "category": {
           "$ref": "#/$defs/ErrorCategory"
@@ -1437,7 +1458,7 @@
   "description": "AdapterSentry M1 result, schema 2.0.0.",
   "properties": {
     "schema_version": {
-      "default": "2.0.0",
+      "default": "2.1.0",
       "pattern": "^2\\.\\d+\\.\\d+$",
       "title": "Schema Version",
       "type": "string"
