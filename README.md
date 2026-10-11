@@ -2,7 +2,7 @@
 
 ![Python](https://img.shields.io/badge/python-%3E%3D3.11-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Version](https://img.shields.io/badge/version-2.0.0-blue)
+![Version](https://img.shields.io/badge/version-2.0.1-blue)
 
 AdapterSentry is a static security scanner for LoRA adapters distributed as `.safetensors`
 files. A LoRA adapter is a small file that changes how a large language model behaves; anyone
@@ -13,7 +13,9 @@ loaded, without running the model and without knowing the trigger.
 **v2.0.0** replaces the analysis engine: exact statistics of the effective update
 ΔW = s·B·A (no sampling, no proxies), streaming analysis that scales to 70B–405B and MoE
 models in tens of megabytes of memory, a comparison of every module with its own family inside
-the adapter, structural findings, and a new result contract (`ScanResult 2.0.0`).
+the adapter, structural findings, and a new result contract (`ScanResult 2.x`).
+**v2.0.1** recalibrates the intra-adapter verdict rule on 393 real adapters from the Hugging
+Face Hub (see [Limits](#limits--read-before-relying-on-a-verdict)).
 See [CHANGELOG.md](CHANGELOG.md) and [Migrating from 1.x](#migrating-from-1x).
 
 ---
@@ -22,18 +24,18 @@ See [CHANGELOG.md](CHANGELOG.md) and [Migrating from 1.x](#migrating-from-1x).
 
 ```text
 $ adaptersentry scan adapter_model.safetensors
-AdapterSentry 2.0.0 · adapter_model.safetensors
+AdapterSentry 2.0.1 · adapter_model.safetensors
 ================================================================
 Verdict:  REVIEW (MEDIUM) · confidence medium · behavioural check recommended
 Status:   ok · policy default · mode full
 Why:
   - [LOW] NO_REFERENCE_PROFILE: No calibrated reference for this model family; verdict relies on intra-adapter comparison
-  - [MEDIUM] INTRA_OUTLIER: Module departs from its family: down_proj layer 47, robust z = 9.4 (threshold 8.0, uncalibrated)
+  - [MEDIUM] INTRA_OUTLIER: Update concentrated on a few outputs, unlike the rest of its family (down_proj layer 47): concentration z = 21.3 ≥ 14.0 (threshold set at 5 % alerts on popular Hub adapters)
 Adapter:  peft_lora, family llama (config), 80 layers, r=64 (declared 64), α=128, scaling alpha_over_r, training trained
 Coverage: 560/560 modules analysed; 0 tensor(s) not analysed
-Intra:    max robust z 9.4 · 2 outlier module(s) · energy Gini 0.41
+Intra:    concentration z 21.3 · max single-feature z 64.0 · 9 outlier module(s) · energy Gini 0.41
 Findings (1):
-  [MEDIUM] INTRA_DEPTH_SPIKE — Module departs from its family  (layer 47, down_proj)
+  [MEDIUM] INTRA_CONCENTRATION_SPIKE — Update concentrated on a few outputs, unlike its family  (layer 47, down_proj)
 ```
 *(Illustrative output.)*
 
@@ -48,7 +50,7 @@ level and what limits it. CI gates read `verdict.action`.
 pip install adaptersentry
 
 adaptersentry scan adapter_model.safetensors                     # text summary
-adaptersentry scan adapter_model.safetensors --format json       # ScanResult 2.0.0
+adaptersentry scan adapter_model.safetensors --format json       # ScanResult 2.1.0
 adaptersentry scan adapter_model.safetensors --format sarif \
     --output adaptersentry.sarif --fail-on review                # GitHub code scanning + CI gate
 adaptersentry batch --input-dir adapters/ --workers 8 --fail-on review
@@ -105,10 +107,13 @@ file ─► validate ─► inventory ─► per module (streamed) ─► compar
    spiky rows are not missed), and how concentrated the update is on a few output rows or
    input columns — for `lm_head` and embeddings, on a few tokens.
 4. **Compare within the adapter.** Each module is compared with its family (all `q_proj`, all
-   `down_proj`, …): the smooth trend with depth is removed with a Theil–Sen line, then robust
-   z-scores (median/MAD) mark modules that depart from their family. This needs no reference
-   data and is insensitive to the adapter's overall strength. It runs for families of at
-   least 16 modules.
+   `down_proj`, …): the trend with depth is removed with a Theil–Sen line, then robust
+   z-scores (median/MAD) are computed for every feature. Real adapters differ a lot between
+   modules of one family, so a single unusual feature is reported but does not change the
+   verdict. The verdict looks for one pattern: a module whose update is **concentrated on a
+   few outputs** — entry kurtosis, top-8 row share and row Hoyer all rise against the family
+   (*concentration z*). This needs no reference data and is insensitive to the adapter's
+   overall strength. It runs for families of at least 16 modules.
 5. **Structural findings** that numbers cannot show: complete `lm_head` / embedding / router
    matrices shipped in the adapter, LoRA on a mixture-of-experts router, ranks that differ from
    the declared `r` (typical of merged adapters), code/pickle/archive files next to the adapter.
@@ -117,7 +122,7 @@ file ─► validate ─► inventory ─► per module (streamed) ─► compar
 | Situation | Action |
 |---|---|
 | File could not be parsed, or part of it was not analysed | at least `review` |
-| A module departs from its family (robust z ≥ 8) | `review` |
+| A module's update is concentrated on a few outputs, unlike its family (concentration z ≥ 14) | `review` |
 | Structural red flag | `review`; `block` with `--policy strict` |
 | Reference profile for the model family says p ≤ α | `review` / `block` *(reference profiles: next release)* |
 | Otherwise | `allow` |
@@ -142,10 +147,15 @@ needed ~3.3 GB just to load the same file.
   random seeds can exceed the signal of a backdoor. A low-risk verdict is not evidence that an
   adapter is safe; behavioural verification in an isolated environment remains necessary for
   adapters you do not trust.
-- **Thresholds are not yet calibrated.** Intra-adapter thresholds (|z| > 3.5 outlier,
-  ≥ 8 review) were set on synthetic data. Reference profiles per model family and a measured
-  detection rate on labelled clean/poisoned adapters are the next step; until then the
-  confidence of a verdict is at most `medium`.
+- **Calibration is partial.** The intra-adapter threshold (concentration z ≥ 14) was set on
+  393 popular PEFT adapters from the Hugging Face Hub (October 2026; mostly Qwen and Llama
+  up to 14B), presumed benign but not verified: about **5 % of them get `review`** from this
+  rule. Larger models and other families may behave differently. Detection was measured only
+  on a toy payload inserted into those adapters (one LoRA direction redirected into 4 outputs
+  of a mid-depth `down_proj`): **71 %** found when the payload is strong, **≤ 3 %** when it is
+  as strong as an ordinary direction. Real backdoors are not toy payloads; a measured
+  detection rate on labelled clean/poisoned adapters and reference profiles per model family
+  are the next steps. Until then the confidence of a verdict is at most `medium`.
 - **An attacker who knows the detector** can try to spread a backdoor across many directions
   and modules, or pad the update with inert components. Static analysis without base-model
   information cannot fully rule this out.
@@ -157,7 +167,7 @@ needed ~3.3 GB just to load the same file.
 
 ---
 
-## Output: ScanResult 2.0.0
+## Output: ScanResult 2.1.0
 
 `--format json` produces one document per adapter: `scan` (who/when/how), `artifact` (hashes,
 provenance — file name only unless `--full-paths`), `adapter` (format, family, rank, α,
@@ -166,7 +176,7 @@ scaling, modules), `status` + `coverage` (what was and was not analysed), `verdi
 optional `modules`, and `errors`.
 
 - Field reference: [docs/output-schema/scan-result.md](docs/output-schema/scan-result.md)
-- JSON Schema: [docs/output-schema/scan-result-2.0.0.schema.json](docs/output-schema/scan-result-2.0.0.schema.json)
+- JSON Schema: [docs/output-schema/scan-result-2.1.0.schema.json](docs/output-schema/scan-result-2.1.0.schema.json)
 - `adaptersentry.load_scan_result()` validates a document and rejects other major versions.
 
 ---

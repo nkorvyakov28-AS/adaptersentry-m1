@@ -5,7 +5,7 @@ pip install adaptersentry
 adaptersentry --version
 ```
 
-Both commands emit `ScanResult 2.0.0` ([field reference](../output-schema/scan-result.md)).
+Both commands emit `ScanResult 2.1.0` ([field reference](../output-schema/scan-result.md)).
 Keep `adapter_config.json` next to the adapter file: without it the scan assumes α = r and
 says so in `verdict.confidence.limiting_factors`.
 
@@ -69,7 +69,7 @@ Output of a run:
 
 ```
 <output-dir>/<run-id>/
-  <scan_id>.json        ScanResult 2.0.0 per adapter
+  <scan_id>.json        ScanResult 2.1.0 per adapter
   run.jsonl             every result, one per line
   run_summary.json      counts by status and by verdict action
 ```

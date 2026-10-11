@@ -12,7 +12,7 @@ adaptersentry-m1/
 │   ├── features/               exact low-rank ΔW statistics, per-module / per-head features
 │   ├── detectors/              intra-adapter comparison, structural findings
 │   ├── scoring/                verdict rules
-│   ├── schemas/                ScanResult 2.0.0, errors, severity
+│   ├── schemas/                ScanResult 2.1.0, errors, severity
 │   ├── reporters/              text, JSON, SARIF
 │   ├── reporting/              sanitising of untrusted strings for terminal output
 │   ├── engine/                 batch engine: manifest, cache, identity, workers, orchestrators

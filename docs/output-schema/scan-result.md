@@ -1,8 +1,8 @@
-# ScanResult 2.0.0
+# ScanResult 2.1.0
 
 One JSON document per scanned adapter, produced by `adaptersentry scan --format json`,
 `adaptersentry batch` and `adaptersentry.scan()`. The machine-readable definition is
-[scan-result-2.0.0.schema.json](scan-result-2.0.0.schema.json) (generated from the model and
+[scan-result-2.1.0.schema.json](scan-result-2.1.0.schema.json) (generated from the model and
 checked for drift in CI).
 
 **Read `verdict.action`.** Everything else explains it.
@@ -99,7 +99,7 @@ a reference profile ⇒ `action != block`; a `block` without a reference profile
 | `DEGRADED_PARSE` | some tensors were not analysed |
 | `NO_REFERENCE_PROFILE` | no calibrated reference for the model family |
 | `REFERENCE_P_BELOW_ALPHA` | the adapter is unusual against the reference profile |
-| `INTRA_OUTLIER` | a module departs from its family (robust z ≥ 8) |
+| `INTRA_OUTLIER` | a module's update is concentrated on a few outputs, unlike its family (concentration z ≥ 14; before 2.0.1: any robust z ≥ 8) |
 | `FULL_WEIGHT_REPLACEMENT`, `ROUTER_ADAPTED`, `RANK_MISMATCH`, `SIBLING_EXECUTABLE` | structural red flags |
 | `STRICT_POLICY_STRUCTURAL` | strict policy turned a red flag into `block` |
 | `MISSING_METADATA` | no metadata in the header and no config |
@@ -107,7 +107,7 @@ a reference profile ⇒ `action != block`; a `block` without a reference profile
 ## `anomaly`
 | Field | Meaning |
 |---|---|
-| `intra` | `{max_robust_z, n_outlier_modules, depth_spikes[{module_type, layer, z}], energy_gini, logrms_dispersion{module: MAD}, attn_mlp_ratio}` — null when no family has ≥ 16 modules |
+| `intra` | `{max_robust_z, n_outlier_modules, depth_spikes[{module_type, layer, z}], max_concentration_z, concentration_spikes[{module_type, layer, z}], energy_gini, logrms_dispersion{module: MAD}, attn_mlp_ratio}` — null when no family has ≥ 16 modules. `max_robust_z` / `depth_spikes`: largest single-feature z (information); `max_concentration_z` / `concentration_spikes` (2.1.0): joint concentration z that drives the verdict |
 | `reference` | `{profile_id, profile_version, stratum, n_reference, distance, p_value, alpha_review, alpha_block}` — null until reference profiles ship |
 | `token_concentration[]` | for LoRA on `lm_head` / embeddings: top token ids, their energy shares, Hoyer, Gini |
 | `top_contributors[]` | ≤ 10 `{feature, module_type, layer, head, expert, value, z}` |
@@ -117,8 +117,9 @@ a reference profile ⇒ `action != block`; a `block` without a reference profile
 
 | Rule | Severity | Meaning |
 |---|---|---|
-| `INTRA_DEPTH_SPIKE` | MEDIUM | module departs from its family (|z| ≥ 8) |
-| `INTRA_OUTLIER` | LOW | mild outlier (3.5 < |z| < 8) |
+| `INTRA_CONCENTRATION_SPIKE` | MEDIUM | update concentrated on a few outputs, unlike its family (concentration z ≥ 14); evidence holds the three z-values (2.0.1+) |
+| `INTRA_OUTLIER` | LOW | one feature differs from the family (|z| > 3.5); information only, common in benign adapters |
+| `INTRA_DEPTH_SPIKE` | MEDIUM | 2.0.0 only (any |z| ≥ 8); no longer emitted |
 | `FULL_WEIGHT_REPLACEMENT` | MEDIUM | full `lm_head` / embedding / router matrix shipped |
 | `FULL_WEIGHT_NOT_ANALYSED` | LOW | other full matrices (e.g. a classification head) |
 | `ROUTER_ADAPTED` | MEDIUM | LoRA on a MoE router |

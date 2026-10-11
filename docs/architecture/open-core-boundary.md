@@ -14,7 +14,7 @@ Nothing beyond M1 is part of this package.
 ## What M1 contains
 
 Everything under `src/adaptersentry/`: parsers, features, detectors, verdict rules, the
-`ScanResult 2.0.0` schema, reporters, the CLI and the batch engine. See
+`ScanResult 2.1.0` schema, reporters, the CLI and the batch engine. See
 [repo-layout.md](repo-layout.md).
 
 ## Public contract
@@ -25,9 +25,9 @@ Integrations should depend only on:
    run_id, hf_repo_id, hf_revision) -> ScanResult`
 2. `adaptersentry.load_scan_result(data) -> ScanResult` — validates a stored document and
    rejects other major schema versions
-3. `adaptersentry.ScanResult` and its JSON form, `ScanResult 2.0.0`
+3. `adaptersentry.ScanResult` and its JSON form, `ScanResult 2.1.0`
    ([field reference](../output-schema/scan-result.md),
-   [JSON Schema](../output-schema/scan-result-2.0.0.schema.json))
+   [JSON Schema](../output-schema/scan-result-2.1.0.schema.json))
 4. The CLI: `adaptersentry scan` (`--format text|json|full-json|sarif`) and
    `adaptersentry batch`, with their exit codes
 
