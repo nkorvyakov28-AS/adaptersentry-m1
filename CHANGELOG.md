@@ -3,7 +3,7 @@
 All notable changes to AdapterSentry are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
-## [2.0.1] — unreleased
+## [2.0.1] — 2026-10-11
 
 ### Why
 The first run of 2.0.0 on real adapters — 393 popular PEFT adapters from the Hugging Face Hub,
