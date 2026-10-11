@@ -3,6 +3,15 @@
 All notable changes to AdapterSentry are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [2.0.2] — unreleased
+
+### Fixed
+- **Module families of multimodal adapters.** Families were keyed by module name only, so in
+  a vision-language model the vision tower's `q_proj` / `up_proj` were compared with the
+  language model's modules of the same name (different size, role and training). A family is
+  now one module name within one layer stack; when an adapter covers more than one stack,
+  family names in the report are qualified (`model.language_model/q_proj`).
+
 ## [2.0.1] — 2026-10-11
 
 ### Why

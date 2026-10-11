@@ -2,7 +2,7 @@
 
 ![Python](https://img.shields.io/badge/python-%3E%3D3.11-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Version](https://img.shields.io/badge/version-2.0.1-blue)
+![Version](https://img.shields.io/badge/version-2.0.2-blue)
 
 AdapterSentry is a static security scanner for LoRA adapters distributed as `.safetensors`
 files. A LoRA adapter is a small file that changes how a large language model behaves; anyone
