@@ -40,6 +40,7 @@ def derive_verdict(
     metadata_present: bool,
     confidence_limits: list[str],
     n_not_analyzed: int,
+    top_spike_edge: bool = False,
 ) -> Verdict:
     """Derive action, level, reasons, behavioural recommendation and confidence."""
     action = "allow"
@@ -85,7 +86,9 @@ def derive_verdict(
             code="INTRA_OUTLIER", severity=Severity.MEDIUM,
             message=f"Update concentrated on a few outputs, unlike the rest of its family{where}: "
                     f"concentration z = {intra.max_concentration_z:.1f} ≥ {CONCENTRATION_REVIEW_Z} "
-                    f"(threshold set at 5 % alerts on popular Hub adapters)"))
+                    f"(threshold set at 5 % alerts on popular Hub adapters)"
+                    + ("; it is a first/last layer, where such differences are common in benign adapters"
+                       if top_spike_edge else "")))
         raise_to("review")
 
     for flag in red_flags:

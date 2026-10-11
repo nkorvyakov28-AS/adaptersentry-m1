@@ -3,7 +3,7 @@
 No reference profile is needed. A 70B adapter has ~80 modules of each kind
 (q_proj, down_proj, …); each module is compared with the rest of its family.
 
-Per family (same module name) and per feature:
+Per family (same module name in the same layer stack) and per feature:
   1. if layer indices are known, remove the depth trend with a Theil–Sen line
      (median of pairwise slopes; insensitive to the outliers we look for);
   2. robust z of the residuals: (x − median) / (1.4826 · MAD), with the
@@ -50,6 +50,11 @@ from adaptersentry.schemas.result import (
 OUTLIER_Z = 3.5
 CONCENTRATION_REVIEW_Z = 14.0
 CONCENTRATION_FEATURES: tuple[str, ...] = ("kurt_dw", "row_top8", "row_hoyer")
+# On Hub adapters 28 of 32 concentration alerts sat in the first 3 or last 2 layers of
+# the model, which work differently from the middle. Such alerts keep the verdict but
+# say so; a per-family threshold for edge layers needs reference profiles.
+EDGE_FIRST_LAYERS = 3
+EDGE_LAST_LAYERS = 2
 # Robust z from small families is unreliable: MAD from a handful of points is
 # noisy, and detrending consumes degrees of freedom. On synthetic clean adapters
 # the maximum |z| reached 12-70 with 6-12 modules per family, but stayed ≤ 6.6
@@ -85,6 +90,7 @@ class ModuleEntry:
     expert: int | None
     features: ModuleFeatures
     energy: float              # ‖ΔW‖²_F, for concentration across modules
+    stack: str = ""            # layer stack (language model, vision tower, …); part of the family
 
 
 @dataclass
@@ -121,6 +127,13 @@ def detrend(layers: np.ndarray, x: np.ndarray) -> np.ndarray:
     return x - (intercept + slope * layers)
 
 
+def is_edge_layer(layer: int | None, n_layers: int | None) -> bool:
+    """True for the first EDGE_FIRST_LAYERS and last EDGE_LAST_LAYERS layers of a stack."""
+    if layer is None or n_layers is None:
+        return False
+    return layer < EDGE_FIRST_LAYERS or layer >= n_layers - EDGE_LAST_LAYERS
+
+
 def concentration_z(zs: dict[str, float]) -> float | None:
     """Joint concentration z of one module: the smallest of the signed z-values of
     CONCENTRATION_FEATURES, so it is high only when all three rise together.
@@ -154,9 +167,14 @@ def compare_within_adapter(entries: list[ModuleEntry], *, top_k: int = 10) -> In
     Returns:
         IntraResult, or None if no family has at least MIN_FAMILY modules.
     """
+    # A family is one module name within one layer stack: a vision tower's q_proj is
+    # not compared with the language model's q_proj. Names are qualified with the
+    # stack only when the adapter covers more than one.
+    qualify = len({e.stack for e in entries}) > 1
+    family_of = {e.index: (f"{e.stack}/{e.module}" if qualify and e.stack else e.module) for e in entries}
     families: dict[str, list[ModuleEntry]] = defaultdict(list)
     for e in entries:
-        families[e.module].append(e)
+        families[family_of[e.index]].append(e)
 
     z_by_module: dict[int, dict[str, float]] = defaultdict(dict)
     contributions: list[tuple[float, Contributor]] = []
@@ -203,7 +221,7 @@ def compare_within_adapter(entries: list[ModuleEntry], *, top_k: int = 10) -> In
     }
     by_index = {e.index: e for e in entries}
     conc_spikes = [
-        DepthSpike(module_type=by_index[idx].module, layer=by_index[idx].layer, z=v)
+        DepthSpike(module_type=family_of[idx], layer=by_index[idx].layer, z=v)
         for idx, v in sorted(concentration.items(), key=lambda kv: -kv[1])
         if v >= CONCENTRATION_REVIEW_Z and by_index[idx].layer is not None
     ][:top_k]
@@ -212,7 +230,7 @@ def compare_within_adapter(entries: list[ModuleEntry], *, top_k: int = 10) -> In
         e = by_index[idx]
         if v > OUTLIER_Z and e.layer is not None and len(spikes) < top_k:
             signed = max(z_by_module[idx].values(), key=abs)
-            spikes.append(DepthSpike(module_type=e.module, layer=e.layer, z=float(signed)))
+            spikes.append(DepthSpike(module_type=family_of[idx], layer=e.layer, z=float(signed)))
 
     energies = np.array([e.energy for e in entries if e.energy > 0.0], dtype=np.float64)
     attn = [e.features.log_rms for e in entries if e.kind == "attention" and e.features.log_rms is not None]

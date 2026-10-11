@@ -77,7 +77,9 @@ Memory is bounded by one pair plus ~15 MB for the kurtosis row chunks.
 ## 5. Intra-adapter comparison
 
 Modules of the same kind should look alike across layers, apart from a smooth trend with
-depth. For every family with **≥ 16 modules** and every feature:
+depth. A family is one module name within one layer stack: multimodal models reuse names
+(`q_proj`, `up_proj`) in the vision tower and the language model, and those are compared
+separately. For every family with **≥ 16 modules** and every feature:
 
 1. remove the depth trend with a Theil–Sen line (median of pairwise slopes — robust to the
    outliers being looked for);
@@ -88,7 +90,9 @@ depth. For every family with **≥ 16 modules** and every feature:
 the smallest of the signed z-values of entry kurtosis, top-8 row share and row Hoyer. It is
 high only when all three rise together — the update is concentrated on a few outputs, unlike
 the rest of its family. `concentration z ≥ 14` raises the verdict to `review`. Single-feature
-`|z| > 3.5` values are reported for information only.
+`|z| > 3.5` values are reported for information only. An alert in the first 3 or last 2
+layers keeps the verdict but notes that those layers often differ in benign adapters (28 of
+32 alerts on the Hub survey were there).
 
 Why: on 393 popular PEFT adapters from the Hugging Face Hub (2026-10, mostly Qwen / Llama up to
 14B, presumed benign) modules of one family turned out far more heterogeneous than synthetic

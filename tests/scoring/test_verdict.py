@@ -47,7 +47,16 @@ def test_concentration_above_threshold_reviews_with_location() -> None:
     intra = IntraAnomaly(max_robust_z=30.0, n_outlier_modules=1, max_concentration_z=21.0,
                          concentration_spikes=[DepthSpike(module_type="down_proj", layer=47, z=21.0)])
     v = _v(intra=intra)
-    assert v.action == "review" and "layer 47" in next(r.message for r in v.reasons if r.code == "INTRA_OUTLIER")
+    message = next(r.message for r in v.reasons if r.code == "INTRA_OUTLIER")
+    assert v.action == "review" and "layer 47" in message and "first/last" not in message
+
+
+def test_edge_layer_alert_keeps_review_and_says_so() -> None:
+    intra = IntraAnomaly(max_robust_z=30.0, n_outlier_modules=1, max_concentration_z=21.0,
+                         concentration_spikes=[DepthSpike(module_type="up_proj", layer=79, z=21.0)])
+    v = _v(intra=intra, top_spike_edge=True)
+    assert v.action == "review"
+    assert "first/last layer" in next(r.message for r in v.reasons if r.code == "INTRA_OUTLIER")
 
 
 def test_strict_policy_needs_red_flag_to_block() -> None:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -13,6 +15,7 @@ from adaptersentry.detectors.intra_adapter import (
     compare_within_adapter,
     concentration_z,
     detrend,
+    is_edge_layer,
     robust_z,
 )
 from adaptersentry.features.spectral import module_features
@@ -73,6 +76,15 @@ class TestHelpers:
         res = detrend(layers, x)
         res = res - np.median(res)  # Theil–Sen intercept is median-based; z-scores re-centre anyway
         assert abs(res[0]) < 1e-9 and res[6] == pytest.approx(0.35, abs=1e-9)
+
+
+class TestEdgeLayer:
+    @pytest.mark.parametrize("layer,expected", [(0, True), (2, True), (3, False), (77, False), (78, True), (79, True)])
+    def test_first_three_and_last_two(self, layer: int, expected: bool) -> None:
+        assert is_edge_layer(layer, 80) is expected
+
+    def test_unknown(self) -> None:
+        assert not is_edge_layer(None, 80) and not is_edge_layer(5, None)
 
 
 class TestConcentrationZ:
@@ -144,6 +156,22 @@ class TestComparison:
         ]
         result = compare_within_adapter(entries + empty)
         assert result is not None and "v_proj" not in result.summary.logrms_dispersion
+
+    def test_stacks_are_separate_families(self) -> None:
+        # A vision tower's q_proj (different size and training) must not be compared with
+        # the language model's q_proj, even at the same layer index.
+        text = _adapter_entries(n_layers=24)
+        vision = _adapter_entries(n_layers=24, d=96, k=96, seed=9)
+        tagged = [replace(e, stack="model.language_model") for e in text] + [
+            replace(e, index=1000 + e.index, stack="model.vision_tower", features=e.features.model_copy(
+                update={"log_rms": (e.features.log_rms or 0.0) + 3.0})) for e in vision]
+        mixed = compare_within_adapter(tagged)
+        alone = compare_within_adapter([replace(e, stack="model.language_model") for e in text])
+        assert mixed is not None and alone is not None
+        text_ids = {e.index for e in text}
+        for idx in text_ids:
+            assert mixed.z_by_module[idx] == pytest.approx(alone.z_by_module[idx])
+        assert {"model.language_model/q_proj", "model.vision_tower/q_proj"} <= set(mixed.summary.logrms_dispersion)
 
     def test_moe_experts_share_family(self) -> None:
         base = _adapter_entries(n_layers=4)

@@ -58,6 +58,18 @@ class TestKeyParsing:
         loc = locate(base)
         assert (loc.layer, loc.expert, loc.module, loc.kind) == (layer, expert, module, kind)
 
+    @pytest.mark.parametrize("base,stack", [
+        ("base_model.model.model.layers.47.mlp.down_proj", "model"),
+        ("base_model.model.model.language_model.layers.4.self_attn.q_proj", "model.language_model"),
+        ("base_model.model.model.vision_tower.vision_model.encoder.layers.4.self_attn.q_proj",
+         "model.vision_tower.vision_model.encoder"),
+        ("base_model.model.visual.blocks.2.mlp.up_proj", "visual"),
+        ("base_model.model.lm_head", ""),
+    ])
+    def test_stack(self, base: str, stack: str) -> None:
+        # Multimodal models reuse module names across stacks; the stack keeps them apart.
+        assert locate(base).stack == stack
+
 
 # ── inventory and iteration ────────────────────────────────────────────────────
 

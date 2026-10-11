@@ -42,6 +42,7 @@ from adaptersentry.detectors.intra_adapter import (
     ModuleEntry,
     compare_within_adapter,
     concentration_z,
+    is_edge_layer,
 )
 from adaptersentry.detectors.structural import find_siblings, structural_findings
 from adaptersentry.features.spectral import head_features, module_features
@@ -322,7 +323,8 @@ def _scan_inventory(path, inv: AdapterInventory, cfg_read, siblings, artifact, s
         idx = len(records)
         records.append(ModuleRecord(**base_record, scale=res.scale, status="ok", features=feats, heads=heads))
         entries.append(ModuleEntry(index=idx, module=loc.module, kind=loc.kind, layer=loc.layer,
-                                   expert=loc.expert, features=feats, energy=core.fro ** 2))
+                                   expert=loc.expert, features=feats, energy=core.fro ** 2,
+                                   stack=loc.stack))
         del pd
 
     intra = compare_within_adapter(entries)
@@ -335,19 +337,30 @@ def _scan_inventory(path, inv: AdapterInventory, cfg_read, siblings, artifact, s
     struct = structural_findings(inv, config, cfg_read.problems, siblings,
                                  unresolved_scale_pattern=unresolved_pattern)
     findings = list(struct.findings)
+    top_spike_edge = False
     if intra is not None:
         pair_by_index = {i: inv.pairs[i] for i in range(len(inv.pairs))}
+        stack_depth: dict[str, int] = {}
+        for p in inv.pairs:
+            if p.location.layer is not None:
+                s = p.location.stack
+                stack_depth[s] = max(stack_depth.get(s, 0), p.location.layer + 1)
         conc = {idx: c for idx, zs in intra.z_by_module.items()
                 if (c := concentration_z(zs)) is not None and c >= CONCENTRATION_REVIEW_Z}
-        for idx, c in sorted(conc.items(), key=lambda kv: -kv[1])[:10]:
+        for rank, (idx, c) in enumerate(sorted(conc.items(), key=lambda kv: -kv[1])[:10]):
             rec, pair = records[idx], pair_by_index[idx]
             zs = intra.z_by_module[idx]
+            edge = is_edge_layer(rec.layer, stack_depth.get(pair.location.stack))
+            if rank == 0:
+                top_spike_edge = edge
+            note = ("; first/last layers often differ like this in benign adapters" if edge else "")
             findings.append(Finding(
                 rule_id="INTRA_CONCENTRATION_SPIKE", severity=Severity.MEDIUM,
                 title="Update concentrated on a few outputs, unlike its family",
                 message=(f"{rec.module} in layer {rec.layer}: kurtosis, top-8 row share and row Hoyer "
-                         f"all rise against the family (concentration z = {c:.1f} ≥ {CONCENTRATION_REVIEW_Z})"),
-                evidence={"concentration_z": round(c, 3),
+                         f"all rise against the family (concentration z = {c:.1f} ≥ {CONCENTRATION_REVIEW_Z})"
+                         f"{note}"),
+                evidence={"concentration_z": round(c, 3), "edge_layer": edge,
                           **{f"z_{f}": round(zs[f], 3) for f in CONCENTRATION_FEATURES}},
                 locations=[Location(layer=rec.layer, module=rec.module, expert=rec.expert,
                                     tensor_key=pair.b.key)],
@@ -453,6 +466,7 @@ def _scan_inventory(path, inv: AdapterInventory, cfg_read, siblings, artifact, s
         status=status, policy=policy, intra=intra.summary if intra else None, reference=None,
         red_flags=struct.red_flags, metadata_present=bool(meta) or config is not None,
         confidence_limits=struct.confidence_limits, n_not_analyzed=n_not,
+        top_spike_edge=top_spike_edge,
     )
     anomaly = Anomaly(
         intra=intra.summary if intra else None,
