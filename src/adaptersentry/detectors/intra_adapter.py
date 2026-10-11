@@ -50,6 +50,11 @@ from adaptersentry.schemas.result import (
 OUTLIER_Z = 3.5
 CONCENTRATION_REVIEW_Z = 14.0
 CONCENTRATION_FEATURES: tuple[str, ...] = ("kurt_dw", "row_top8", "row_hoyer")
+# On Hub adapters 28 of 32 concentration alerts sat in the first 3 or last 2 layers of
+# the model, which work differently from the middle. Such alerts keep the verdict but
+# say so; a per-family threshold for edge layers needs reference profiles.
+EDGE_FIRST_LAYERS = 3
+EDGE_LAST_LAYERS = 2
 # Robust z from small families is unreliable: MAD from a handful of points is
 # noisy, and detrending consumes degrees of freedom. On synthetic clean adapters
 # the maximum |z| reached 12-70 with 6-12 modules per family, but stayed ≤ 6.6
@@ -120,6 +125,13 @@ def detrend(layers: np.ndarray, x: np.ndarray) -> np.ndarray:
         warnings.simplefilter("ignore", RuntimeWarning)
         slope, intercept, _, _ = theilslopes(x, layers)
     return x - (intercept + slope * layers)
+
+
+def is_edge_layer(layer: int | None, n_layers: int | None) -> bool:
+    """True for the first EDGE_FIRST_LAYERS and last EDGE_LAST_LAYERS layers of a stack."""
+    if layer is None or n_layers is None:
+        return False
+    return layer < EDGE_FIRST_LAYERS or layer >= n_layers - EDGE_LAST_LAYERS
 
 
 def concentration_z(zs: dict[str, float]) -> float | None:

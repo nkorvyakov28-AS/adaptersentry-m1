@@ -15,6 +15,7 @@ from adaptersentry.detectors.intra_adapter import (
     compare_within_adapter,
     concentration_z,
     detrend,
+    is_edge_layer,
     robust_z,
 )
 from adaptersentry.features.spectral import module_features
@@ -75,6 +76,15 @@ class TestHelpers:
         res = detrend(layers, x)
         res = res - np.median(res)  # Theil–Sen intercept is median-based; z-scores re-centre anyway
         assert abs(res[0]) < 1e-9 and res[6] == pytest.approx(0.35, abs=1e-9)
+
+
+class TestEdgeLayer:
+    @pytest.mark.parametrize("layer,expected", [(0, True), (2, True), (3, False), (77, False), (78, True), (79, True)])
+    def test_first_three_and_last_two(self, layer: int, expected: bool) -> None:
+        assert is_edge_layer(layer, 80) is expected
+
+    def test_unknown(self) -> None:
+        assert not is_edge_layer(None, 80) and not is_edge_layer(5, None)
 
 
 class TestConcentrationZ:

@@ -3,7 +3,7 @@
 All notable changes to AdapterSentry are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
-## [2.0.2] — unreleased
+## [2.0.2] — 2026-10-11
 
 ### Fixed
 - **Module families of multimodal adapters.** Families were keyed by module name only, so in
@@ -11,6 +11,13 @@ This project follows [Semantic Versioning](https://semver.org/).
   language model's modules of the same name (different size, role and training). A family is
   now one module name within one layer stack; when an adapter covers more than one stack,
   family names in the report are qualified (`model.language_model/q_proj`).
+
+### Changed
+- A concentration alert in the first 3 or last 2 layers keeps the `review` verdict but says
+  that such differences are common in benign adapters there (finding evidence
+  `edge_layer: true`). On the Hub survey 28 of 32 alerts were in these layers; a separate
+  threshold for them would let a payload placed there go unnoticed, so it waits for
+  per-family reference profiles.
 
 ## [2.0.1] — 2026-10-11
 

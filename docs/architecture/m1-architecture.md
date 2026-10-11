@@ -90,7 +90,9 @@ separately. For every family with **≥ 16 modules** and every feature:
 the smallest of the signed z-values of entry kurtosis, top-8 row share and row Hoyer. It is
 high only when all three rise together — the update is concentrated on a few outputs, unlike
 the rest of its family. `concentration z ≥ 14` raises the verdict to `review`. Single-feature
-`|z| > 3.5` values are reported for information only.
+`|z| > 3.5` values are reported for information only. An alert in the first 3 or last 2
+layers keeps the verdict but notes that those layers often differ in benign adapters (28 of
+32 alerts on the Hub survey were there).
 
 Why: on 393 popular PEFT adapters from the Hugging Face Hub (2026-10, mostly Qwen / Llama up to
 14B, presumed benign) modules of one family turned out far more heterogeneous than synthetic

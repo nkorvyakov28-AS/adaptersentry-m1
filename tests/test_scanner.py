@@ -62,6 +62,14 @@ class TestDetection:
         spike = next(f for f in result.findings if f.rule_id == "INTRA_CONCENTRATION_SPIKE")
         assert spike.locations[0].layer == 7 and spike.locations[0].module == "down_proj"
         assert spike.evidence["concentration_z"] >= 14.0
+        assert spike.evidence["edge_layer"] is False
+
+    def test_edge_layer_alert_is_marked(self, tmp_path: Path) -> None:
+        result = scan(_write_adapter(tmp_path / "edge", inject_layer=15))  # last of 16 layers
+        spike = next(f for f in result.findings if f.rule_id == "INTRA_CONCENTRATION_SPIKE")
+        assert result.verdict.action == "review"
+        assert spike.locations[0].layer == 15 and spike.evidence["edge_layer"] is True
+        assert "benign adapters" in spike.message
 
     def test_rescale_attack_does_not_hide_the_update(self, tmp_path: Path) -> None:
         # B shrunk by 1e4 and lora_alpha raised by 1e4: effective ΔW is unchanged.
