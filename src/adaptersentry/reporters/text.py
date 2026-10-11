@@ -1,4 +1,4 @@
-"""Human-readable text report for a ScanResult 2.0.0.
+"""Human-readable text report for a ScanResult 2.x.
 
 Every string that originates in the adapter file (paths, tensor keys, module
 names, messages built from them) goes through ``safe_text`` so control or bidi
@@ -68,7 +68,9 @@ def render(result: ScanResult, *, no_color: bool = False, max_findings: int = 15
     intra = result.anomaly.intra
     if intra is not None:
         gini = f" · energy Gini {intra.energy_gini:.2f}" if intra.energy_gini is not None else ""
-        lines.append(f"Intra:    max robust z {intra.max_robust_z:.1f} · "
+        conc = (f"concentration z {intra.max_concentration_z:.1f} · "
+                if intra.max_concentration_z is not None else "")
+        lines.append(f"Intra:    {conc}max single-feature z {intra.max_robust_z:.1f} · "
                      f"{intra.n_outlier_modules} outlier module(s){gini}")
     if result.anomaly.top_contributors:
         lines.append("Top contributors:")

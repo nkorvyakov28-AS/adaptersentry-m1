@@ -1,4 +1,4 @@
-"""Tests for the text, JSON and SARIF renderings of a ScanResult 2.0.0."""
+"""Tests for the text, JSON and SARIF renderings of a ScanResult 2.x."""
 
 from __future__ import annotations
 
@@ -73,7 +73,7 @@ class TestSarif:
 
     def test_logical_location_names_layer(self, results: dict) -> None:
         run = sarif_reporter.render(results["inj"])["runs"][0]
-        spike = next(r for r in run["results"] if r["ruleId"] == "INTRA_DEPTH_SPIKE")
+        spike = next(r for r in run["results"] if r["ruleId"] == "INTRA_CONCENTRATION_SPIKE")
         name = spike["locations"][0]["logicalLocations"][0]["name"]
         assert name == "layers.6.down_proj"
 

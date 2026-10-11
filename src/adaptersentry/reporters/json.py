@@ -1,4 +1,4 @@
-"""JSON output of a ScanResult 2.0.0."""
+"""JSON output of a ScanResult 2.x."""
 
 from __future__ import annotations
 

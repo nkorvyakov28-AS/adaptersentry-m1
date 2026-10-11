@@ -1,4 +1,4 @@
-"""SARIF 2.1.0 report for a ScanResult 2.0.0 (GitHub code scanning compatible).
+"""SARIF 2.1.0 report for a ScanResult 2.x (GitHub code scanning compatible).
 
 - One rule descriptor per rule id; ``security-severity`` maps to GitHub's buckets.
 - Every finding is a result; its locations point at the adapter file and, as

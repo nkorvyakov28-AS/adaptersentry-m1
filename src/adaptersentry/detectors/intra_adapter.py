@@ -1,8 +1,7 @@
 """Intra-adapter comparison: which modules differ from their own family.
 
 No reference profile is needed. A 70B adapter has ~80 modules of each kind
-(q_proj, down_proj, …); they should look alike, apart from a smooth trend with
-depth. A module that departs from its family is suspicious.
+(q_proj, down_proj, …); each module is compared with the rest of its family.
 
 Per family (same module name) and per feature:
   1. if layer indices are known, remove the depth trend with a Theil–Sen line
@@ -10,11 +9,20 @@ Per family (same module name) and per feature:
   2. robust z of the residuals: (x − median) / (1.4826 · MAD), with the
      mean-absolute-deviation fallback when MAD = 0.
 
-Thresholds (UNCALIBRATED — to be fitted on the benign reference corpus):
-    OUTLIER_Z = 3.5   module reported as an outlier (Iglewicz–Hoaglin)
-    REVIEW_Z  = 8.0   strong enough to raise the verdict to "review"
-A large adapter yields thousands of z-values, so a few exceed 3.5 by chance;
-REVIEW_Z is set far above that level for this reason.
+Verdict rule — joint concentration (calibrated on real adapters):
+    A module whose update is concentrated on a few outputs moves three features
+    up together: entry kurtosis, top-8 row share and row Hoyer. Its
+    concentration z is the smallest of those three signed z-values; the verdict
+    is raised when it reaches CONCENTRATION_REVIEW_Z.
+
+    Real adapters are far more heterogeneous within a family than synthetic
+    ones: on 393 popular PEFT adapters from the Hugging Face Hub (2026-10,
+    mostly Qwen/Llama up to 14B) the largest single-feature |z| had a median of
+    14 and exceeded the former threshold of 8 in 83 % of them. The joint rule at
+    14.0 flagged 5 % of those (presumed benign) adapters, and a threshold fitted
+    on one random half gave 4.8–5.9 % on the other half.
+
+Single-feature z-values above OUTLIER_Z are still reported, for information only.
 
 Security Notes:
     - Pure numpy/scipy on feature values; no I/O.
@@ -40,7 +48,8 @@ from adaptersentry.schemas.result import (
 )
 
 OUTLIER_Z = 3.5
-REVIEW_Z = 8.0
+CONCENTRATION_REVIEW_Z = 14.0
+CONCENTRATION_FEATURES: tuple[str, ...] = ("kurt_dw", "row_top8", "row_hoyer")
 # Robust z from small families is unreliable: MAD from a handful of points is
 # noisy, and detrending consumes degrees of freedom. On synthetic clean adapters
 # the maximum |z| reached 12-70 with 6-12 modules per family, but stayed ≤ 6.6
@@ -112,6 +121,15 @@ def detrend(layers: np.ndarray, x: np.ndarray) -> np.ndarray:
     return x - (intercept + slope * layers)
 
 
+def concentration_z(zs: dict[str, float]) -> float | None:
+    """Joint concentration z of one module: the smallest of the signed z-values of
+    CONCENTRATION_FEATURES, so it is high only when all three rise together.
+    None when any of them is missing."""
+    if any(f not in zs for f in CONCENTRATION_FEATURES):
+        return None
+    return min(zs[f] for f in CONCENTRATION_FEATURES)
+
+
 def _transform(value: float | None, kind: str) -> float | None:
     if value is None or not math.isfinite(value):
         return None
@@ -180,7 +198,15 @@ def compare_within_adapter(entries: list[ModuleEntry], *, top_k: int = 10) -> In
     per_module_max: dict[int, float] = {
         idx: max(abs(v) for v in zs.values()) for idx, zs in z_by_module.items() if zs
     }
+    concentration: dict[int, float] = {
+        idx: concentration_z(zs) for idx, zs in z_by_module.items() if concentration_z(zs) is not None
+    }
     by_index = {e.index: e for e in entries}
+    conc_spikes = [
+        DepthSpike(module_type=by_index[idx].module, layer=by_index[idx].layer, z=v)
+        for idx, v in sorted(concentration.items(), key=lambda kv: -kv[1])
+        if v >= CONCENTRATION_REVIEW_Z and by_index[idx].layer is not None
+    ][:top_k]
     n_outliers = sum(1 for v in per_module_max.values() if v > OUTLIER_Z)
     for idx, v in sorted(per_module_max.items(), key=lambda kv: -kv[1]):
         e = by_index[idx]
@@ -197,6 +223,8 @@ def compare_within_adapter(entries: list[ModuleEntry], *, top_k: int = 10) -> In
         max_robust_z=max(per_module_max.values(), default=0.0),
         n_outlier_modules=n_outliers,
         depth_spikes=spikes,
+        max_concentration_z=max(concentration.values(), default=None),
+        concentration_spikes=conc_spikes,
         energy_gini=_gini(energies),
         logrms_dispersion=dispersion,
         attn_mlp_ratio=float(np.median(attn) - np.median(mlp)) if attn and mlp else None,

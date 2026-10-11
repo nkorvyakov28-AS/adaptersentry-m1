@@ -1,4 +1,4 @@
-"""CLI tests for `adaptersentry scan` (ScanResult 2.0.0 output, exit codes, flags)."""
+"""CLI tests for `adaptersentry scan` (ScanResult 2.x output, exit codes, flags)."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ class TestFormats:
     def test_json_is_scan_result_2(self, tmp_path: Path) -> None:
         out = _run("scan", str(write_adapter(tmp_path / "a")), "--format", "json")
         result = load_scan_result(out.stdout)
-        assert result.schema_version == "2.0.0" and result.modules is None
+        assert result.schema_version == "2.1.0" and result.modules is None
         assert result.artifact.provenance.path == "adapter_model.safetensors"
 
     def test_full_json_includes_modules(self, tmp_path: Path) -> None:
@@ -47,7 +47,7 @@ class TestFormats:
         assert load_scan_result(out.stdout).artifact.provenance.path == str(path.resolve())
 
     def test_sarif(self, tmp_path: Path) -> None:
-        out = _run("scan", str(write_adapter(tmp_path / "a", inject_layer=5)), "--format", "sarif")
+        out = _run("scan", str(write_adapter(tmp_path / "a", inject_layer=7)), "--format", "sarif")
         doc = json.loads(out.stdout)
         assert doc["version"] == "2.1.0"
         run = doc["runs"][0]
@@ -71,7 +71,7 @@ class TestExitCodes:
         assert load_scan_result(out.stdout).verdict.action == "review"
 
     def test_fail_on_review_triggers(self, tmp_path: Path) -> None:
-        path = write_adapter(tmp_path / "a", inject_layer=5)
+        path = write_adapter(tmp_path / "a", inject_layer=7)
         assert _run("scan", str(path), "--fail-on", "review").returncode == 2
         assert _run("scan", str(path), "--fail-on", "block").returncode == 0
 

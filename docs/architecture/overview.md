@@ -2,7 +2,7 @@
 
 AdapterSentry M1 is a static security scanner for LoRA adapters stored as `.safetensors`
 files. It reads the adapter's weights without loading a base model and without running
-inference, and returns one `ScanResult 2.0.0` per adapter with a verdict of `allow`,
+inference, and returns one `ScanResult 2.1.0` per adapter with a verdict of `allow`,
 `review` or `block`.
 
 Static analysis is a first filter, not a proof of safety. Detection thresholds are not yet
@@ -35,16 +35,16 @@ file ─► identity ─► config ─► inventory ─► per module (streamed)
 | Streaming | `parsers/adapter_file.py` | Loads one A/B pair at a time as float32 and releases it before the next; peak memory is bounded by the largest pair |
 | Exact ΔW statistics | `features/lowrank_core.py` | Singular values, Frobenius / row / column norms of ΔW = s·B·A computed exactly through the r×r Gram matrices A·Aᵀ and Bᵀ·B; ΔW is never materialised. Entry kurtosis is estimated by importance sampling of rows |
 | Module features | `features/spectral.py` | Shape features of ΔW (stable rank, participation ratio, spectral entropy, excess concentration, kurtosis, row/column concentration) plus two log-magnitude features; optional per attention head |
-| Intra-adapter comparison | `detectors/intra_adapter.py` | Per module family (all `q_proj`, all `down_proj`, …): remove the depth trend with a Theil–Sen line, then robust z-scores (median/MAD). Families need ≥ 16 modules. Thresholds `OUTLIER_Z = 3.5`, `REVIEW_Z = 8.0` are uncalibrated |
+| Intra-adapter comparison | `detectors/intra_adapter.py` | Per module family (all `q_proj`, all `down_proj`, …): remove the depth trend with a Theil–Sen line, then robust z-scores (median/MAD). Families need ≥ 16 modules. The verdict uses the joint concentration z (all of kurtosis, top-8 row share and row Hoyer rising), threshold 14.0, set at 5 % alerts on 393 popular Hub adapters; single-feature z-values are information only |
 | Structural findings | `detectors/structural.py` | Red flags: full `lm_head` / embedding / router matrices, LoRA on a MoE router, ranks that differ from the declared `r`, code / pickle / archive files next to the adapter. Informational: DoRA, unresolved scale patterns, config problems, target-module mismatch, trainable tokens |
 | Verdict | `scoring/verdict.py` | One rule set; policy `default` or `strict` (below) |
-| Result | `schemas/result.py` | `ScanResult 2.0.0` (pydantic); re-checks fail-closed invariants on construction |
+| Result | `schemas/result.py` | `ScanResult 2.1.0` (pydantic); re-checks fail-closed invariants on construction |
 | Output | `reporters/` | `text`, `json`, `full-json`, `sarif` (SARIF 2.1.0). Text output passes file-derived strings through `reporting/sanitize.py` |
 
 ### Verdict rules
 
 1. Parsing failed, or part of the file was not analysed → at least `review`.
-2. A module departs from its family with robust |z| ≥ 8 → `review`.
+2. A module's update is concentrated on a few outputs, unlike its family (concentration z ≥ 14) → `review`.
 3. Structural red flag → `review`; `block` under `--policy strict`.
 4. Otherwise → `allow`.
 

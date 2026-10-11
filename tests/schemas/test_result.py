@@ -1,4 +1,4 @@
-"""Contract tests for ScanResult 2.0.0 (schemas/result.py)."""
+"""Contract tests for ScanResult 2.x (schemas/result.py)."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from adaptersentry.schemas.result import (
 )
 
 _FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
-_SCHEMA_FILE = Path(__file__).resolve().parents[2] / "docs" / "output-schema" / "scan-result-2.0.0.schema.json"
+_SCHEMA_FILE = Path(__file__).resolve().parents[2] / "docs" / "output-schema" / "scan-result-2.1.0.schema.json"
 
 
 def _fixture() -> dict:
@@ -43,6 +43,12 @@ class TestRoundTrip:
         assert result.schema_version == "2.0.0"
         assert result.verdict.action == "review"
         assert result.modules is None
+
+    def test_2_0_0_document_reads_without_2_1_fields(self) -> None:
+        # Fields added in 2.1.0 are optional: documents written by 2.0.0 stay valid.
+        result = load_scan_result(_fixture())
+        assert result.anomaly.intra.max_concentration_z is None
+        assert result.anomaly.intra.concentration_spikes == []
 
     def test_round_trip_is_lossless(self) -> None:
         result = load_scan_result(_fixture())
@@ -153,6 +159,6 @@ class TestPublishedJsonSchema:
     def test_published_schema_matches_model(self) -> None:
         published = json.loads(_SCHEMA_FILE.read_text())
         assert published == ScanResult.model_json_schema(), (
-            "docs/output-schema/scan-result-2.0.0.schema.json is stale; regenerate it from "
+            "docs/output-schema/scan-result-2.1.0.schema.json is stale; regenerate it from "
             "ScanResult.model_json_schema()"
         )

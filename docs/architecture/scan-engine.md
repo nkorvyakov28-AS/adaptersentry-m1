@@ -45,7 +45,7 @@ Workers only compute. All manifest and cache writes happen in the orchestrator p
 
 ```
 <output-dir>/<run_id>/
-  <scan_id>.json        one ScanResult 2.0.0 per adapter (file name = scan_id hex)
+  <scan_id>.json        one ScanResult 2.1.0 per adapter (file name = scan_id hex)
   run.jsonl             append-only log, one ScanResult per line
   run_summary.json      counts by status (ok/degraded/failed/cached) and by verdict action
 ```

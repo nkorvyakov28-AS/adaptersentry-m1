@@ -122,6 +122,7 @@ class ScanResult:
     level: str | None = None              # verdict.level: LOW | MEDIUM | HIGH | CRITICAL
     training_state: str | None = None     # adapter.training_state
     max_robust_z: float | None = None     # anomaly.intra.max_robust_z (None when not computed)
+    max_concentration_z: float | None = None  # anomaly.intra.max_concentration_z (drives the verdict)
     n_outlier_modules: int | None = None  # anomaly.intra.n_outlier_modules
     reason_codes: list[str] = field(default_factory=list)   # verdict.reasons[].code
     n_findings: int | None = None
@@ -621,6 +622,7 @@ def _extract_result(
         level=m1_result.verdict.level.value,
         training_state=m1_result.adapter.training_state,
         max_robust_z=intra.max_robust_z if intra is not None else None,
+        max_concentration_z=intra.max_concentration_z if intra is not None else None,
         n_outlier_modules=intra.n_outlier_modules if intra is not None else None,
         reason_codes=[r.code for r in m1_result.verdict.reasons],
         n_findings=len(m1_result.findings),

@@ -540,7 +540,7 @@ class TestAnalysisFailedClassification:
         fake = SimpleNamespace(
             status="ok",
             errors=[],
-            anomaly=SimpleNamespace(intra=SimpleNamespace(max_robust_z=6.5, n_outlier_modules=2)),
+            anomaly=SimpleNamespace(intra=SimpleNamespace(max_robust_z=6.5, max_concentration_z=15.0, n_outlier_modules=2)),
             verdict=SimpleNamespace(action="review", level=SimpleNamespace(value="MEDIUM"),
                                     reasons=[SimpleNamespace(code="INTRA_OUTLIER")]),
             adapter=SimpleNamespace(training_state="trained", rank_declared=16),

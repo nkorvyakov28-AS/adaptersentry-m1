@@ -3,6 +3,32 @@
 All notable changes to AdapterSentry are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [2.0.1] — 2026-10-11
+
+### Why
+The first run of 2.0.0 on real adapters — 393 popular PEFT adapters from the Hugging Face Hub,
+presumed benign — gave `review` for 83 % of them. The intra-adapter threshold (any robust
+z ≥ 8) had been set on synthetic adapters; modules of one family in real adapters are far more
+heterogeneous, and the largest single-feature z had a median of 14.
+
+### Fixed
+- **Intra-adapter verdict rule.** The verdict now uses the *concentration z* of a module: the
+  smallest of the z-values of entry kurtosis, top-8 row share and row Hoyer, so it is high only
+  when the update is concentrated on a few outputs in all three. `review` at ≥ 14.0. On the
+  survey adapters this flags 5 % (a threshold fitted on one random half gave 4.8–5.9 % on the
+  other). On a toy payload inserted into those adapters it found 71 % of strong payloads versus
+  21 % for the 2.0.0 rule at the same alert rate; weak payloads are not found (see README,
+  Limits).
+- Single-feature outliers are reported as `INTRA_OUTLIER` (LOW) findings for information only.
+
+### Changed
+- New finding `INTRA_CONCENTRATION_SPIKE` (MEDIUM) with the three z-values as evidence;
+  `INTRA_DEPTH_SPIKE` is no longer emitted.
+- `ScanResult` schema **2.1.0**: `anomaly.intra.max_concentration_z` and
+  `anomaly.intra.concentration_spikes` added. 2.0.0 documents remain readable.
+- `config_hash` (and so `scan_id`) changes: cached 2.0.0 results are not reused.
+- Hub survey records (`benchmarks/hub_scanner.py`) include `max_concentration_z`.
+
 ## [2.0.0] — 2026-09-30
 
 A new analysis engine and result contract. 1.x results are not compatible; re-scan adapters.

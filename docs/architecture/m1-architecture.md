@@ -2,7 +2,7 @@
 
 M1 answers one question about a LoRA adapter file, without loading a base model or running
 inference: **does anything in these weights look like a planted behaviour, and how sure can
-we be?** The answer is a `ScanResult 2.0.0` (see [scan-result.md](../output-schema/scan-result.md)).
+we be?** The answer is a `ScanResult 2.1.0` (see [scan-result.md](../output-schema/scan-result.md)).
 
 ## Pipeline
 
@@ -84,11 +84,22 @@ depth. For every family with **≥ 16 modules** and every feature:
 2. robust z of the residuals = (x − median) / (1.4826 · MAD) (mean-absolute-deviation
    fallback when MAD = 0; zero-spread families are skipped).
 
-`|z| > 3.5` marks an outlier for the report; `|z| ≥ 8` raises the verdict to `review`. A
-large adapter produces thousands of z-values, so the verdict threshold sits far above the
-outlier threshold. Both are **uncalibrated** (set on synthetic adapters: clean families ≤ 6.6
-from 16 modules up, single injected layers ≥ 48; families under 16 modules were unreliable,
-hence the minimum).
+**Verdict rule (2.0.1).** The verdict uses one statistic per module, the *concentration z*:
+the smallest of the signed z-values of entry kurtosis, top-8 row share and row Hoyer. It is
+high only when all three rise together — the update is concentrated on a few outputs, unlike
+the rest of its family. `concentration z ≥ 14` raises the verdict to `review`. Single-feature
+`|z| > 3.5` values are reported for information only.
+
+Why: on 393 popular PEFT adapters from the Hugging Face Hub (2026-10, mostly Qwen / Llama up to
+14B, presumed benign) modules of one family turned out far more heterogeneous than synthetic
+ones. The largest single-feature |z| had a median of 14, and the 2.0.0 rule (any |z| ≥ 8)
+flagged 83 % of those adapters. In a toy test — one rank slot of a mid-depth `down_proj` B
+redirected into 4 output rows — only the three concentration features responded, always
+upwards. The joint rule at 14 flags 5 % of the survey adapters (a threshold fitted on one
+random half gave 4.8–5.9 % on the other) and found 71 % of strong toy payloads (column norm
+10× the median) versus 21 % for the 2.0.0 rule at the same alert rate; weak payloads (1×) were
+not found by any intra-adapter rule. Families under 16 modules were unreliable on synthetic
+data, hence the minimum.
 
 ## 6. Structural findings
 
@@ -102,7 +113,7 @@ patterns, ignored config fields, target-module mismatch, trainable-token deltas.
 
 `scoring/verdict.py`, in order: failed/degraded parsing → at least `review`; reference
 profile p ≤ α_block → `block`, ≤ α_review → `review` (reference profiles are the next
-release); intra-adapter |z| ≥ 8 → `review`; red flags → `review` (strict: `block`). The
+release); intra-adapter concentration z ≥ 14 → `review`; red flags → `review` (strict: `block`). The
 default policy never blocks without a reference profile. The `ScanResult` model re-checks the
 fail-closed invariants on construction.
 
