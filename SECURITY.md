@@ -56,7 +56,8 @@ report it so it can be investigated and disclosed responsibly.
 **How to report:**
 
 1. Open a GitHub issue in this repository with the label `malicious-adapter`, **or**
-   email `security@adaptersentry.io`.
+   reach out privately — Telegram [@niknkor](https://t.me/niknkor) or
+   email [n.korvyakov28@gmail.com](mailto:n.korvyakov28@gmail.com).
 2. Include:
    - The HuggingFace repository ID (e.g., `author/model-name`)
    - The M1 scan report:
@@ -79,7 +80,8 @@ in AdapterSentry code, dependencies, or infrastructure.
 
 **How to report:**
 
-Email `security@adaptersentry.io` with:
+Report privately — Telegram [@niknkor](https://t.me/niknkor) or
+email [n.korvyakov28@gmail.com](mailto:n.korvyakov28@gmail.com) — with:
 
 - A description of the vulnerability and its potential impact
 - Reproduction steps (minimal reproducing example preferred)
