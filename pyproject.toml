@@ -46,7 +46,7 @@ adaptersentry-bench = "benchmarks.hub_scanner:main"
 
 [project.optional-dependencies]
 # Benchmarks only: the scanner itself never talks to the network.
-bench = ["huggingface_hub>=0.20.0,<2", "psutil>=5.9.0,<8"]
+bench = ["huggingface_hub>=0.20.0,<3", "psutil>=5.9.0,<8"]
 dev = ["adaptersentry[bench]", "pytest>=7.4.0,<10"]
 ray = ["ray[default]>=2.9.0,<3"]
 
