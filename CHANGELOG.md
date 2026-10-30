@@ -3,6 +3,39 @@
 All notable changes to AdapterSentry are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [2.1.0] — 2026-10-30
+
+### Why
+2.0.2 deferred a per-adapter decision to "per-family reference profiles". Intra-adapter
+comparison answers "is one module unlike the rest of *this* adapter"; it cannot say whether a
+whole adapter is unlike *benign adapters of its family*. A payload spread evenly across modules
+leaves no intra-adapter outlier. Reference profiles close that gap.
+
+### Added
+- **Per-family reference profiles (ESR stage 5).** Calibrated benign profiles now ship for
+  `qwen3`, `qwen2.5` and `llama-3` (105–117 held-out reference adapters each). In full mode a
+  scan whose declared base matches a profile is scored against it: each feature is standardised
+  against the family's (relative-depth, log-rank) trend, summarised into a fixed per-adapter
+  vector, and turned into a squared Mahalanobis distance and a **split-conformal p-value**
+
+      p = (1 + #{D2_reference ≥ D2}) / (n_reference + 1),
+
+  which bounds the benign false-positive rate at α by construction. The result populates
+  `anomaly.reference` (`ReferenceComparison`, already in the 2.0.0 schema) and can raise the
+  verdict to `review` with reason `REFERENCE_P_BELOW_ALPHA`.
+
+### Changed
+- An adapter of a covered family no longer carries the `NO_REFERENCE_PROFILE` note; adapters of
+  any other family are unchanged (intra-adapter comparison only).
+
+### Notes
+- The reference comparison escalates to `review` only. Automatic `block` from a profile stays
+  **off** (`REFERENCE_CAN_BLOCK = False`) until the detection rate against a poisoned corpus is
+  measured: the benign FPR is calibrated, the true-positive rate is not yet. `schema_version`
+  is unchanged (2.0.0) — only a previously-unused optional field is now populated.
+- Reference scoring runs in **full mode only**; the calibration corpus was built with full
+  features, and a fast-mode vector would not be exchangeable with it.
+
 ## [2.0.2] — 2026-10-11
 
 ### Fixed

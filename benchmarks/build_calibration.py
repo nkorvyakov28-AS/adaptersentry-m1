@@ -37,9 +37,17 @@ import sys
 import numpy as np
 from sklearn.covariance import LedoitWolf
 
-# Reused from the profile builder; ensure its directory is importable under -I.
+from adaptersentry.scoring.profile_vector import (
+    FEATURE_TRANSFORM,
+    adapter_vector,
+    mahalanobis_sq,
+    transform_value,
+)
+
+# family_match is the corpus filter and stays with the profile builder; ensure
+# its directory is importable under -I.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from build_profile import FEATURE_TRANSFORM, _transform, family_match  # noqa: E402
+from build_profile import family_match  # noqa: E402
 
 logger = logging.getLogger("build_calibration")
 
@@ -68,43 +76,12 @@ def load_adapters(dump: Path, family_key: str) -> list[dict]:
                 rel = (layer / (n_layers - 1)) if (layer is not None and n_layers > 1) else 0.0
                 mf = m.get("f") or {}  # "f" may be present but null when a tensor was not featurised
                 vals = {feat: t for feat, kind in FEATURE_TRANSFORM.items()
-                        if (t := _transform(mf.get(feat), kind)) is not None}
+                        if (t := transform_value(mf.get(feat), kind)) is not None}
                 if vals:
                     mods.append((m.get("m", "?"), rel, vals))
             if mods:
                 out.append({"repo": repo, "log_rank": math.log(float(rank)), "modules": mods})
     return out
-
-
-def adapter_vector(adapter: dict, profile: dict) -> np.ndarray:
-    """Fixed [median z, p90 |z|] per feature; missing feature -> 0 (treated as typical)."""
-    modules = list(profile["modules"])
-    features = list(profile["features"])
-    m_index = {m: i for i, m in enumerate(modules)}
-    coef, med, scale = profile["coef"], profile["resid_med"], profile["resid_scale"]
-
-    vec = np.zeros(2 * len(features), dtype=np.float64)
-    for fi, feat in enumerate(features):
-        zs: list[float] = []
-        for name, rel, vals in adapter["modules"]:
-            mi = m_index.get(name)
-            if mi is None or feat not in vals:
-                continue
-            c, s = coef[mi, fi], scale[mi, fi]
-            if not np.all(np.isfinite(c)) or not s > 0.0:
-                continue
-            pred = c[0] + c[1] * rel + c[2] * adapter["log_rank"]
-            zs.append((vals[feat] - pred - med[mi, fi]) / s)
-        if zs:
-            az = np.abs(zs)
-            vec[2 * fi] = float(np.median(zs))
-            vec[2 * fi + 1] = float(np.percentile(az, 90))
-    return vec
-
-
-def mahalanobis_sq(X: np.ndarray, mu: np.ndarray, prec: np.ndarray) -> np.ndarray:
-    d = X - mu
-    return np.einsum("ij,jk,ik->i", d, prec, d)
 
 
 def main() -> None:
@@ -122,7 +99,7 @@ def main() -> None:
     profile = dict(np.load(args.profile, allow_pickle=True))
     family = str(profile["family"])
     adapters = load_adapters(args.features, family)
-    X = np.array([adapter_vector(a, profile) for a in adapters])
+    X = np.array([adapter_vector(a["modules"], a["log_rank"], profile) for a in adapters])
     n = len(adapters)
     logger.info("family %s: %d adapters, vector dim %d", family, n, X.shape[1])
 

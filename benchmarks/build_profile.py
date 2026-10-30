@@ -38,23 +38,9 @@ from pathlib import Path
 
 import numpy as np
 
-logger = logging.getLogger("build_profile")
+from adaptersentry.scoring.profile_vector import FEATURE_TRANSFORM, transform_value
 
-# ESR features and the transform applied before detrending, mirroring
-# ``detectors/intra_adapter.py``: log for strictly positive heavy-tailed
-# quantities, identity otherwise. A module missing a feature is skipped for that
-# feature only.
-FEATURE_TRANSFORM: dict[str, str] = {
-    "log_rms": "id",
-    "top1_e": "id",
-    "srank_r": "id",
-    "spec_h": "id",
-    "excess_conc": "id",
-    "kurt_dw": "log",
-    "row_hoyer": "id",
-    "row_top8": "log",
-    "col_hoyer": "id",
-}
+logger = logging.getLogger("build_profile")
 
 _MAD_TO_SIGMA = 1.4826
 # Need enough modules of a type to fit a 3-parameter trend and a stable MAD.
@@ -74,14 +60,6 @@ class Point:
 def family_match(base: str | None, family_key: str) -> bool:
     """True when an adapter's base model belongs to the requested family."""
     return family_key.lower() in (base or "").lower()
-
-
-def _transform(value: float | None, kind: str) -> float | None:
-    if value is None or not math.isfinite(value):
-        return None
-    if kind == "log":
-        return math.log(value) if value > 0.0 else None
-    return value
 
 
 def load_points(dump: Path, family_key: str) -> tuple[list[Point], list[str]]:
@@ -110,7 +88,7 @@ def load_points(dump: Path, family_key: str) -> tuple[list[Point], list[str]]:
                 mf = m.get("f") or {}  # "f" may be present but null when a tensor was not featurised
                 vals = {
                     feat: t for feat, kind in FEATURE_TRANSFORM.items()
-                    if (t := _transform(mf.get(feat), kind)) is not None
+                    if (t := transform_value(mf.get(feat), kind)) is not None
                 }
                 if vals:
                     points.append(Point(module=m.get("m", "?"), rel_depth=rel,
