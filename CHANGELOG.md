@@ -3,6 +3,23 @@
 All notable changes to AdapterSentry are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [2.2.0] — 2026-10-30
+
+### Added
+- **Reference profiles for three more base families: `gemma`, `mistral`, `phi`.** Built and
+  calibrated the same way as 2.1.0 (detrend by relative depth and log-rank, pool residuals,
+  split-conformal p-value), from benign PEFT adapters on the Hub. Empirical benign flag rate
+  lands on target: gemma (n_ref 111) and mistral (n_ref 109) at α=0.01 (FPR 0.9 %); phi
+  (n_ref 70) at the α=0.05 tier (FPR 4.3 %), since fewer public phi adapters exist. Six
+  families now ship; a matching full-mode scan is scored automatically with no engine change
+  (the loader discovers `profiles/*.npz`).
+
+### Notes
+- The `phi` profile's internal family key is `phi-` (not the bare `phi`), so substring matching
+  cannot misfire on unrelated bases that merely contain "phi" (e.g. `dolphin`, `sophia`).
+- Same deliberate limits as 2.1.0: review-only (block gated), full mode only, `schema_version`
+  unchanged (2.0.0).
+
 ## [2.1.0] — 2026-10-30
 
 ### Why

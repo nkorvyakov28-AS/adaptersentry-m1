@@ -14,7 +14,7 @@ from adaptersentry.scoring.verdict import derive_verdict
 from adaptersentry.schemas.result import Policy, ReferenceComparison
 from tests.adapter_factory import write_adapter
 
-SHIPPED = ("qwen3", "qwen2.5", "llama-3")
+SHIPPED = ("qwen3", "qwen2.5", "llama-3", "gemma", "mistral", "phi-")
 
 
 def _adapter(tmp_path: Path, base: str, **kw) -> Path:
@@ -27,7 +27,7 @@ def _adapter(tmp_path: Path, base: str, **kw) -> Path:
 
 
 class TestShippedProfiles:
-    def test_three_families_ship_calibrated(self) -> None:
+    def test_families_ship_calibrated(self) -> None:
         avail = {fam for fam, _ in refmod._available()}
         assert set(SHIPPED) <= avail
 
@@ -54,9 +54,28 @@ class TestLoaderSelection:
         assert ref.profile_version.startswith("esr-c-1")
 
     def test_unknown_family_has_no_reference(self, tmp_path: Path) -> None:
-        result = scan(_adapter(tmp_path, "google/gemma-2b"))
+        # bloom has no shipped profile.
+        result = scan(_adapter(tmp_path, "bigscience/bloom-560m"))
         assert result.anomaly.reference is None
         assert any(r.code == "NO_REFERENCE_PROFILE" for r in result.verdict.reasons)
+
+    @pytest.mark.parametrize("base,family,alpha_block,alpha_review", [
+        ("google/gemma-2-9b", "gemma", 0.01, 0.05),
+        ("mistralai/Mistral-7B-Instruct-v0.3", "mistral", 0.01, 0.05),
+        ("microsoft/Phi-3-mini-4k-instruct", "phi-", 0.05, 0.10),
+    ])
+    def test_new_families_compared(self, tmp_path, base, family, alpha_block, alpha_review) -> None:
+        ref = scan(_adapter(tmp_path, base)).anomaly.reference
+        assert ref is not None and ref.profile_id == family
+        assert 0.0 < ref.p_value <= 1.0 and ref.distance >= 0.0
+        assert ref.alpha_block == pytest.approx(alpha_block)
+        assert ref.alpha_review == pytest.approx(alpha_review)
+
+    def test_phi_key_excludes_bare_phi_substring(self, tmp_path: Path) -> None:
+        # The phi profile's family key is "phi-", so a base that merely contains
+        # the bare substring "phi" (sophia, dolphin, memphis, …) must not select
+        # it. Here the base has no family key at all -> no reference.
+        assert scan(_adapter(tmp_path, "someorg/sophia-7b")).anomaly.reference is None
 
     def test_longest_family_key_wins(self, tmp_path: Path) -> None:
         # "qwen2.5" must select the qwen2.5 profile, not a shorter "qwen*" prefix.
