@@ -1,7 +1,10 @@
 """Verdict of a ScanResult 2.0.0 — one place, agreed rules.
 
     1. Reference profile present (stage 5):
-         p ≤ alpha_block  → block / HIGH
+         p ≤ alpha_block  → block / HIGH  (only when reference_can_block;
+                            otherwise it falls through to review, since the
+                            benign FPR is calibrated but the poisoned-corpus
+                            detection rate is not yet measured)
          p ≤ alpha_review → review / MEDIUM
     2. No reference profile: intra-adapter comparison only; at most "review"
        under the default policy.
@@ -41,6 +44,7 @@ def derive_verdict(
     confidence_limits: list[str],
     n_not_analyzed: int,
     top_spike_edge: bool = False,
+    reference_can_block: bool = True,
 ) -> Verdict:
     """Derive action, level, reasons, behavioural recommendation and confidence."""
     action = "allow"
@@ -61,7 +65,7 @@ def derive_verdict(
         raise_to("review")
 
     if reference is not None:
-        if reference.p_value <= reference.alpha_block:
+        if reference_can_block and reference.p_value <= reference.alpha_block:
             reasons.append(Reason(code="REFERENCE_P_BELOW_ALPHA", severity=Severity.HIGH,
                                   message=f"p = {reference.p_value:.4g} ≤ {reference.alpha_block} "
                                           f"against {reference.n_reference} benign adapters"))

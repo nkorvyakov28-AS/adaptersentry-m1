@@ -69,6 +69,7 @@ from adaptersentry.schemas.result import (
     ScanResult,
     TokenConcentration,
 )
+from adaptersentry.scoring.reference import REFERENCE_CAN_BLOCK, compare_to_reference
 from adaptersentry.scoring.verdict import derive_verdict
 from adaptersentry.version import __version__
 
@@ -462,15 +463,27 @@ def _scan_inventory(path, inv: AdapterInventory, cfg_read, siblings, artifact, s
         config_present=config is not None,
     )
 
+    # Reference profile (ESR stage 5): full mode only — the calibration corpus
+    # was dumped with full features, so a fast-mode vector would not be
+    # exchangeable with it and the conformal FPR would not hold.
+    reference = None
+    if mode == "full" and entries:
+        reference = compare_to_reference(
+            base_model_declared=declared_base,
+            rank=rank_declared,
+            n_model_layers=adapter.n_model_layers,
+            entries=entries,
+        )
+
     verdict = derive_verdict(
-        status=status, policy=policy, intra=intra.summary if intra else None, reference=None,
+        status=status, policy=policy, intra=intra.summary if intra else None, reference=reference,
         red_flags=struct.red_flags, metadata_present=bool(meta) or config is not None,
         confidence_limits=struct.confidence_limits, n_not_analyzed=n_not,
-        top_spike_edge=top_spike_edge,
+        top_spike_edge=top_spike_edge, reference_can_block=REFERENCE_CAN_BLOCK,
     )
     anomaly = Anomaly(
         intra=intra.summary if intra else None,
-        reference=None,
+        reference=reference,
         token_concentration=token_conc,
         top_contributors=intra.top_contributors if intra else [],
     )

@@ -10,11 +10,14 @@ from safetensors.numpy import save_file
 
 MODULES = (("self_attn.q_proj", 256, 256), ("self_attn.v_proj", 128, 256), ("mlp.down_proj", 256, 512))
 
+# Llama-2 base: keeps base_family "llama" but matches none of the shipped
+# reference profiles (qwen3, qwen2.5, llama-3), so the default fixture exercises
+# the intra-adapter-only path. The reference path is tested with an explicit base.
 DEFAULT_CONFIG = {
     "peft_type": "LORA",
     "r": 8,
     "lora_alpha": 16,
-    "base_model_name_or_path": "meta-llama/Llama-3.2-1B",
+    "base_model_name_or_path": "meta-llama/Llama-2-7b-hf",
     "target_modules": ["q_proj", "v_proj", "down_proj"],
 }
 

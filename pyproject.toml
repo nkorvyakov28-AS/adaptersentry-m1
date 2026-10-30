@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "adaptersentry"
-version = "2.0.2"
+version = "2.1.0"
 description = "Static security scanner for LoRA adapters — detects anomalous weight patterns in .safetensors files"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -53,6 +53,9 @@ ray = ["ray[default]>=2.9.0,<3"]
 [tool.setuptools.packages.find]
 where = ["src", "."]
 include = ["adaptersentry*", "benchmarks*"]
+
+[tool.setuptools.package-data]
+"adaptersentry.profiles" = ["*.npz"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
