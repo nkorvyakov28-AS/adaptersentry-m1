@@ -107,9 +107,10 @@ def load_points(dump: Path, family_key: str) -> tuple[list[Point], list[str]]:
             for m in rec.get("modules", []):
                 layer = m.get("l")
                 rel = (layer / (n_layers - 1)) if (layer is not None and n_layers > 1) else 0.0
+                mf = m.get("f") or {}  # "f" may be present but null when a tensor was not featurised
                 vals = {
                     feat: t for feat, kind in FEATURE_TRANSFORM.items()
-                    if (t := _transform(m.get("f", {}).get(feat), kind)) is not None
+                    if (t := _transform(mf.get(feat), kind)) is not None
                 }
                 if vals:
                     points.append(Point(module=m.get("m", "?"), rel_depth=rel,
