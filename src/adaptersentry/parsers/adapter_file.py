@@ -222,6 +222,52 @@ def _load(handle: Any, inv: AdapterInventory, entry: TensorEntry) -> np.ndarray:
     return np.asarray(handle.get_tensor(entry.key), dtype=np.float32)
 
 
+@dataclass(frozen=True)
+class MagnitudeData:
+    """One loaded DoRA magnitude vector, located in the model.
+
+    DoRA adds a trainable per-output-channel magnitude ``m`` on top of a LoRA A/B
+    pair: the effective weight is ``m · (W0 + ΔW_LoRA) / ‖W0 + ΔW_LoRA‖``, column
+    by column. ``m`` is thus a direct, trained scaling of each output channel —
+    an attack surface the A/B analysis does not see.
+    """
+
+    key: str
+    location: ModuleLocation
+    values: np.ndarray | None
+    error: str | None = None
+
+
+def iter_magnitudes(inv: AdapterInventory) -> Iterator[MagnitudeData]:
+    """Load each DoRA magnitude vector as a 1-D float32 array, one at a time.
+
+    Load failures are yielded with ``error`` set, never swallowed. A vector that
+    is not 1-D (or is empty) is yielded with ``values=None`` and an error, so the
+    caller can surface it rather than mis-reading it.
+    """
+    if not inv.dora_magnitudes:
+        return
+    with safe_open(str(inv.path), framework="numpy") as handle:
+        for key in inv.dora_magnitudes:
+            info = inv.header.get(key, {})
+            base = key[: -len(".weight")] if key.endswith(".weight") else key
+            # Trim the DoRA suffix so the location resolves to the host module.
+            for suffix in (".lora_magnitude_vector", ".weight"):
+                if base.endswith(suffix):
+                    base = base[: -len(suffix)]
+            location = locate(base)
+            try:
+                entry = _entry(key, info)
+                arr = np.asarray(_load(handle, inv, entry), dtype=np.float32).reshape(-1)
+                if arr.size == 0:
+                    raise ValueError("empty magnitude vector")
+            except Exception as exc:  # noqa: BLE001 — reported, never swallowed
+                logger.warning("DoRA magnitude %r could not be loaded: %s", key, exc)
+                yield MagnitudeData(key=key, location=location, values=None, error=f"load failed: {exc}")
+                continue
+            yield MagnitudeData(key=key, location=location, values=arr)
+
+
 def iter_pairs(inv: AdapterInventory) -> Iterator[PairData]:
     """Load LoRA pairs one at a time as float32.
 

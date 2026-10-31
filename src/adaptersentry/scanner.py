@@ -47,7 +47,13 @@ from adaptersentry.detectors.intra_adapter import (
 from adaptersentry.detectors.structural import find_siblings, structural_findings
 from adaptersentry.features.spectral import head_features, module_features
 from adaptersentry.parsers.adapter_config import read_adapter_config, resolve_scale
-from adaptersentry.parsers.adapter_file import AdapterInventory, iter_pairs, open_adapter
+from adaptersentry.parsers.adapter_file import (
+    AdapterInventory,
+    iter_magnitudes,
+    iter_pairs,
+    open_adapter,
+)
+from adaptersentry.parsers.methods import is_decomposition_init, recognise_non_lora_method
 from adaptersentry.schemas.errors import ScanError, ScanPhase
 from adaptersentry.schemas.severity import Severity
 from adaptersentry.schemas.result import (
@@ -189,6 +195,118 @@ def failed_result(
                           config_present=False)
 
 
+# DoRA magnitude concentration above this Hoyer is reported, information only.
+# There is no benign-DoRA corpus yet to calibrate a verdict threshold on, so a
+# concentrated magnitude vector never changes the action — it is surfaced, not acted on.
+_DORA_HOYER_INFO = 0.6
+
+
+def _hoyer(v: np.ndarray) -> float | None:
+    """Hoyer sparsity of ``|v|`` in [0, 1]; ``None`` when ``v`` has no energy.
+
+    1.0 means a single channel carries everything, 0.0 means a flat vector.
+    """
+    a = np.abs(v.astype(np.float64))
+    n = a.size
+    l2 = float(np.sqrt((a * a).sum()))
+    if n < 2 or l2 <= 0.0:
+        return None
+    root_n = np.sqrt(float(n))
+    return float((root_n - float(a.sum()) / l2) / (root_n - 1.0))
+
+
+def _analyse_dora_magnitudes(
+    inv: AdapterInventory,
+) -> tuple[list[Finding], int, list[NotAnalyzed]]:
+    """Information-only read of the DoRA magnitude vectors.
+
+    Reports how concentrated each vector's per-channel deviations are (a spike on
+    a few output channels is where a DoRA backdoor would sit) but never feeds the
+    verdict: no benign-DoRA corpus exists yet to calibrate a threshold, so acting
+    on it would be a guess. Successfully read vectors count as analysed; unreadable
+    ones are returned as NotAnalyzed so coverage stays honest.
+
+    Returns ``(findings, n_analyzed, skipped)``.
+    """
+    ranked: list[tuple[float, Finding]] = []
+    skipped: list[NotAnalyzed] = []
+    n_ok = 0
+    for md in iter_magnitudes(inv):
+        if md.values is None:
+            skipped.append(NotAnalyzed(
+                tensor_key=md.key, reason=md.error or "unreadable magnitude vector",
+                category="malformed"))
+            continue
+        n_ok += 1
+        dev = md.values - float(np.median(md.values))
+        hoyer = _hoyer(dev)
+        if hoyer is None or hoyer < _DORA_HOYER_INFO:
+            continue
+        energy = dev.astype(np.float64) ** 2
+        total = float(energy.sum())
+        top = np.argsort(energy)[::-1][:_TOP_TOKENS]
+        layer_note = f" layer {md.location.layer}" if md.location.layer is not None else ""
+        ranked.append((hoyer, Finding(
+            rule_id="DORA_MAGNITUDE", severity=Severity.LOW,
+            title="DoRA magnitude vector concentrated on a few channels",
+            message=(f"{md.location.module}{layer_note}: magnitude deviations concentrate on a few "
+                     f"output channels (Hoyer {hoyer:.2f}); information only — DoRA magnitudes are "
+                     f"not yet calibrated and do not change the verdict"),
+            evidence={
+                "hoyer": round(hoyer, 3),
+                "top_channels": [int(i) for i in top],
+                "top_shares": [round(float(energy[i] / total), 4) for i in top] if total > 0 else [],
+            },
+            locations=[Location(layer=md.location.layer, module=md.location.module, tensor_key=md.key)],
+        )))
+    ranked.sort(key=lambda hf: -hf[0])
+    return [f for _, f in ranked[:_TOP_TOKENS]], n_ok, skipped
+
+
+def _unsupported_method_result(
+    inv: AdapterInventory, *, method: str, config, scan_info: ScanInfo, artifact: Artifact | None,
+) -> ScanResult:
+    """A result for a recognised non-LoRA PEFT method (VeRA, IA³, …).
+
+    The file parsed cleanly; it is simply not a LoRA-family adapter, so the
+    spectral analysis does not apply. Fail-closed (review + behavioural check)
+    with a reason that names the method, rather than a misleading parse failure.
+    """
+    keys = [k for k in inv.header if k != "__metadata__"]
+    peft_type = (config.peft_type if config else None) or inv.metadata.get("peft_type")
+    declared_base = (config.base_model_name_or_path if config else None) \
+        or inv.metadata.get("base_model_name_or_path")
+    message = (f"Recognised {method} adapter; AdapterSentry M1 statically analyses LoRA-family "
+               f"updates (ΔW = s·B·A) only, so {method} is not vetted here")
+    verdict = derive_verdict(
+        status="failed", policy=scan_info.policy, intra=None, reference=None, red_flags=[],
+        metadata_present=bool(inv.metadata) or config is not None, confidence_limits=[],
+        n_not_analyzed=len(keys), failure_code="UNSUPPORTED_PEFT_METHOD", failure_message=message,
+    )
+    return ScanResult(
+        scan=scan_info, artifact=artifact,
+        adapter=AdapterInfo(
+            format="unknown", peft_type=peft_type, base_model_declared=declared_base,
+            base_family=_base_family(declared_base),
+            base_family_source="config" if declared_base else "unknown",
+            metadata_present=bool(inv.metadata), config_present=config is not None,
+        ),
+        status="failed",
+        coverage=Coverage(
+            n_tensors_total=inv.n_tensors_total, n_tensors_analyzed=0,
+            n_modules=0, n_modules_analyzed=0, n_not_analyzed=len(keys),
+            not_analyzed=[NotAnalyzed(tensor_key=k, reason=f"{method} parameter; not a LoRA A/B pair",
+                                      category="unsupported") for k in keys][:MAX_LISTED_NOT_ANALYZED],
+        ),
+        verdict=verdict,
+        findings=[Finding(
+            rule_id="UNSUPPORTED_PEFT_METHOD", severity=Severity.MEDIUM,
+            title=f"{method} adapter not statically analysed",
+            message=message, remediation="Behavioural check of this adapter (M2)")],
+        errors=[],
+    )
+
+
 def scan(
     path: Path,
     *,
@@ -244,6 +362,12 @@ def scan(
         return _failed_result(path, exc, scan_info=scan_info(), artifact=artifact,
                               config_present=config is not None)
     if not inv.pairs:
+        keys = [k for k in inv.header if k != "__metadata__"]
+        method = recognise_non_lora_method(
+            (config.peft_type if config else None) or inv.metadata.get("peft_type"), keys)
+        if method is not None:
+            return _unsupported_method_result(
+                inv, method=method, config=config, scan_info=scan_info(), artifact=artifact)
         return _failed_result(
             path, ValueError("no lora_A/lora_B pair could be analysed — not a PEFT LoRA adapter"),
             scan_info=scan_info(), artifact=artifact, config_present=config is not None,
@@ -394,6 +518,12 @@ def _scan_inventory(path, inv: AdapterInventory, cfg_read, siblings, artifact, s
             evidence={"top_token_ids": tc.top_token_ids, "top_shares": [round(s, 4) for s in tc.top_shares]},
         ))
 
+    # DoRA magnitude vectors: a trained per-output-channel scaling the A/B
+    # analysis does not see. Surface their concentration (information only).
+    dora_findings, n_mag_ok, dora_skipped = _analyse_dora_magnitudes(inv)
+    findings.extend(dora_findings)
+    not_analyzed.extend(dora_skipped)
+
     n_not = len(not_analyzed) + 2 * len(non_finite)
     listed = not_analyzed + [
         NotAnalyzed(tensor_key=f"{base}.lora_A/lora_B", reason="NaN or Inf weights", category="malformed")
@@ -402,7 +532,7 @@ def _scan_inventory(path, inv: AdapterInventory, cfg_read, siblings, artifact, s
     n_ok = len(entries)
     coverage = Coverage(
         n_tensors_total=inv.n_tensors_total,
-        n_tensors_analyzed=2 * n_ok,
+        n_tensors_analyzed=2 * n_ok + n_mag_ok,
         n_modules=len(inv.pairs),
         n_modules_analyzed=n_ok,
         n_not_analyzed=n_not,
@@ -475,10 +605,19 @@ def _scan_inventory(path, inv: AdapterInventory, cfg_read, siblings, artifact, s
             entries=entries,
         )
 
+    confidence_limits = list(struct.confidence_limits)
+    # A decomposition init (PiSSA/OLoRA/CorDA) seeds A/B from the base weight's own
+    # spectrum, so the adapter can sit far from a reference calibrated on default-init
+    # LoRA without being malicious. Note it; never flag on it.
+    if config is not None and is_decomposition_init(config.init_lora_weights):
+        confidence_limits.append(
+            f"{config.init_lora_weights} init re-parameterises A/B from the base weight; "
+            "the reference profile is calibrated on default-init LoRA")
+
     verdict = derive_verdict(
         status=status, policy=policy, intra=intra.summary if intra else None, reference=reference,
         red_flags=struct.red_flags, metadata_present=bool(meta) or config is not None,
-        confidence_limits=struct.confidence_limits, n_not_analyzed=n_not,
+        confidence_limits=confidence_limits, n_not_analyzed=n_not,
         top_spike_edge=top_spike_edge, reference_can_block=REFERENCE_CAN_BLOCK,
     )
     anomaly = Anomaly(
