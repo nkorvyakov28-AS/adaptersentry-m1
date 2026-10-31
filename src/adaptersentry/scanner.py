@@ -51,6 +51,7 @@ from adaptersentry.parsers.adapter_file import (
     AdapterInventory,
     iter_magnitudes,
     iter_pairs,
+    iter_token_deltas,
     open_adapter,
 )
 from adaptersentry.parsers.methods import is_decomposition_init, recognise_non_lora_method
@@ -200,6 +201,11 @@ def failed_result(
 # concentrated magnitude vector never changes the action — it is surfaced, not acted on.
 _DORA_HOYER_INFO = 0.6
 
+# Trainable-token delta concentration above this Hoyer is reported, information
+# only, for the same reason as DoRA: no benign corpus of token deltas exists to
+# calibrate a verdict threshold, so a concentrated delta is surfaced, not acted on.
+_TOKEN_DELTA_HOYER_INFO = 0.6
+
 
 def _hoyer(v: np.ndarray) -> float | None:
     """Hoyer sparsity of ``|v|`` in [0, 1]; ``None`` when ``v`` has no energy.
@@ -258,6 +264,58 @@ def _analyse_dora_magnitudes(
                 "top_shares": [round(float(energy[i] / total), 4) for i in top] if total > 0 else [],
             },
             locations=[Location(layer=md.location.layer, module=md.location.module, tensor_key=md.key)],
+        )))
+    ranked.sort(key=lambda hf: -hf[0])
+    return [f for _, f in ranked[:_TOP_TOKENS]], n_ok, skipped
+
+
+def _analyse_token_deltas(
+    inv: AdapterInventory,
+) -> tuple[list[Finding], int, list[NotAnalyzed]]:
+    """Information-only read of the trainable-token deltas.
+
+    Reports how concentrated the per-token delta energy is: a rare-token backdoor
+    moves one token's embedding row far more than the rest, so a highly
+    concentrated norm vector is the signature worth surfacing. Like the DoRA read,
+    it never feeds the verdict — there is no benign corpus of token deltas to
+    calibrate a threshold on, so acting on it would be a guess. Successfully read
+    deltas count as analysed; unreadable ones are returned as NotAnalyzed so
+    coverage stays honest.
+
+    Returns ``(findings, n_analyzed, skipped)``.
+    """
+    ranked: list[tuple[float, Finding]] = []
+    skipped: list[NotAnalyzed] = []
+    n_ok = 0
+    for td in iter_token_deltas(inv):
+        if td.values is None:
+            skipped.append(NotAnalyzed(
+                tensor_key=td.key, reason=td.error or "unreadable token delta", category="malformed"))
+            continue
+        n_ok += 1
+        row_norms = np.sqrt((td.values.astype(np.float64) ** 2).sum(axis=1))
+        n_tokens = int(row_norms.size)
+        hoyer = _hoyer(row_norms)
+        if hoyer is None or hoyer < _TOKEN_DELTA_HOYER_INFO:
+            continue
+        energy = row_norms ** 2
+        total = float(energy.sum())
+        top = np.argsort(energy)[::-1][:_TOP_TOKENS]
+        layer_note = f" layer {td.location.layer}" if td.location.layer is not None else ""
+        ranked.append((hoyer, Finding(
+            rule_id="TRAINABLE_TOKEN_DELTA", severity=Severity.LOW,
+            title="Trainable-token delta concentrated on a few tokens",
+            message=(f"{td.location.module}{layer_note}: of {n_tokens} trained token rows, the delta "
+                     f"energy concentrates on a few (Hoyer {hoyer:.2f}) — where a rare-token backdoor "
+                     f"would sit; information only — token deltas are not yet calibrated and do not "
+                     f"change the verdict"),
+            evidence={
+                "n_tokens": n_tokens,
+                "hoyer": round(hoyer, 3),
+                "top_token_rows": [int(i) for i in top],
+                "top_shares": [round(float(energy[i] / total), 4) for i in top] if total > 0 else [],
+            },
+            locations=[Location(layer=td.location.layer, module=td.location.module, tensor_key=td.key)],
         )))
     ranked.sort(key=lambda hf: -hf[0])
     return [f for _, f in ranked[:_TOP_TOKENS]], n_ok, skipped
@@ -524,6 +582,13 @@ def _scan_inventory(path, inv: AdapterInventory, cfg_read, siblings, artifact, s
     findings.extend(dora_findings)
     not_analyzed.extend(dora_skipped)
 
+    # Trainable-token deltas: the embedding rows of selected tokens, where a
+    # rare-token backdoor would hide. Surface their concentration (information
+    # only); reading them closes a gap that otherwise left them unanalysed.
+    token_findings, n_tok_ok, token_skipped = _analyse_token_deltas(inv)
+    findings.extend(token_findings)
+    not_analyzed.extend(token_skipped)
+
     n_not = len(not_analyzed) + 2 * len(non_finite)
     listed = not_analyzed + [
         NotAnalyzed(tensor_key=f"{base}.lora_A/lora_B", reason="NaN or Inf weights", category="malformed")
@@ -532,7 +597,7 @@ def _scan_inventory(path, inv: AdapterInventory, cfg_read, siblings, artifact, s
     n_ok = len(entries)
     coverage = Coverage(
         n_tensors_total=inv.n_tensors_total,
-        n_tensors_analyzed=2 * n_ok + n_mag_ok,
+        n_tensors_analyzed=2 * n_ok + n_mag_ok + n_tok_ok,
         n_modules=len(inv.pairs),
         n_modules_analyzed=n_ok,
         n_not_analyzed=n_not,
