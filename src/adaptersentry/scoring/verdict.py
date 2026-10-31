@@ -45,8 +45,15 @@ def derive_verdict(
     n_not_analyzed: int,
     top_spike_edge: bool = False,
     reference_can_block: bool = True,
+    failure_code: str = "PARSE_FAILED",
+    failure_message: str = "Adapter could not be parsed; absence of findings is not evidence of safety",
 ) -> Verdict:
-    """Derive action, level, reasons, behavioural recommendation and confidence."""
+    """Derive action, level, reasons, behavioural recommendation and confidence.
+
+    ``failure_code`` / ``failure_message`` override the reason emitted for a
+    ``failed`` status, so a recognised-but-unsupported PEFT method can say so
+    (``UNSUPPORTED_PEFT_METHOD``) instead of reporting a broken file.
+    """
     action = "allow"
     reasons: list[Reason] = []
 
@@ -56,8 +63,7 @@ def derive_verdict(
             action = target
 
     if status == "failed":
-        reasons.append(Reason(code="PARSE_FAILED", severity=Severity.MEDIUM,
-                              message="Adapter could not be parsed; absence of findings is not evidence of safety"))
+        reasons.append(Reason(code=failure_code, severity=Severity.MEDIUM, message=failure_message))
         raise_to("review")
     elif status == "degraded":
         reasons.append(Reason(code="DEGRADED_PARSE", severity=Severity.MEDIUM,

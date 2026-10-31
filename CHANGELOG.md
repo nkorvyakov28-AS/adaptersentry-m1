@@ -3,6 +3,28 @@
 All notable changes to AdapterSentry are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [2.3.0] — 2026-10-31
+
+### Added
+- **Recognition of non-LoRA PEFT methods (VeRA, IA³, LoHa, LoKr, (B)OFT, prompt/prefix tuning, …).**
+  A valid adapter of a method AdapterSentry does not statically analyse used to be reported as a
+  bare parse failure ("no LoRA pair — invalid adapter"). It is now recognised — from the declared
+  `peft_type` or the tensor-key signature — and reported with reason `UNSUPPORTED_PEFT_METHOD`, the
+  method named, status `failed`, action `review` and a behavioural check recommended (fail-closed).
+  A genuinely unknown no-pair file still reports `PARSE_FAILED`.
+- **DoRA magnitude vectors are now read, not silently ignored.** The trained per-output-channel
+  magnitude `m` (`lora_magnitude_vector`) is a scaling the A/B analysis does not see. Its
+  per-channel concentration is now computed and, when concentrated, surfaced as an information-only
+  `DORA_MAGNITUDE` finding (LOW). The vectors count as analysed, so coverage is honest. It does
+  **not** change the verdict: there is no benign-DoRA corpus yet to calibrate a threshold on.
+- **Decomposition-init note (PiSSA/OLoRA/CorDA/EVA).** These inits seed A/B from the base weight's
+  own spectrum, so such an adapter can sit far from a reference calibrated on default-init LoRA
+  without being malicious. The scan records this as a confidence limiting factor; it never flags on it.
+
+### Notes
+- `schema_version` unchanged; the additions use existing fields (new reason/finding codes and
+  confidence limits, which are free-form strings in the 2.x contract).
+
 ## [2.2.0] — 2026-10-30
 
 ### Added
