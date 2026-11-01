@@ -193,7 +193,9 @@ def structural_findings(
         findings.append(Finding(
             rule_id="TRAINABLE_TOKENS", severity=Severity.LOW,
             title="Adapter changes individual token embeddings",
-            message="trainable_token_indices deltas are present and not analysed yet.",
+            message="trainable_token deltas are present; their per-token concentration is read "
+                    "and reported (see TRAINABLE_TOKEN_DELTA), but modifying token embeddings still "
+                    "warrants a behavioural check.",
             evidence={"tensors": inv.trainable_tokens[:20]},
         ))
 

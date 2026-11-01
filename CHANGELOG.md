@@ -3,6 +3,23 @@
 All notable changes to AdapterSentry are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [2.4.0] — 2026-10-31
+
+### Added
+- **Trainable-token deltas are now read, not left unanalysed.** PEFT selective-token tuning trains a
+  change to the embedding rows of a chosen set of tokens (`trainable_tokens_delta`) — the place a
+  rare-token backdoor would hide. The delta used to be dumped into `not_analyzed` unread; it is now
+  loaded and its per-token energy concentration computed. When concentrated, it is surfaced as an
+  information-only `TRAINABLE_TOKEN_DELTA` finding (LOW), and the delta counts as analysed. It does
+  **not** change the verdict: there is no benign corpus of token deltas to calibrate a threshold on,
+  exactly as for DoRA magnitudes. The saved original-embedding copy (`trainable_tokens_original`) is
+  recorded as a reference copy in `not_analyzed`, so an adapter that modifies token embeddings still
+  gets the conservative behavioural-check recommendation.
+
+### Notes
+- `schema_version` unchanged; the addition uses existing fields (a new finding code, a free-form
+  string in the 2.x contract).
+
 ## [2.3.0] — 2026-10-31
 
 ### Added

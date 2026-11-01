@@ -179,10 +179,18 @@ def open_adapter(path: Path) -> AdapterInventory:
         elif parsed.role == "dora_magnitude":
             inv.dora_magnitudes.append(key)
         elif parsed.role == "trainable_tokens":
-            inv.trainable_tokens.append(key)
-            inv.not_analyzed.append(SkippedTensor(
-                key, "trainable token delta; not analysed yet", ErrorCategory.UNSUPPORTED,
-            ))
+            # PEFT selective-token tuning saves two tensors per module: the trained
+            # change (``trainable_tokens_delta``) and a reference copy of the chosen
+            # tokens' original rows (``trainable_tokens_original``). The delta is the
+            # adapter's payload surface and is analysed; the original is base-model
+            # data copied in, so it is recorded as not-analysed, not treated as a gap.
+            if "trainable_tokens_delta" in key:
+                inv.trainable_tokens.append(key)
+            else:
+                inv.not_analyzed.append(SkippedTensor(
+                    key, "saved original token embeddings; reference copy, not an adapter payload",
+                    ErrorCategory.UNSUPPORTED,
+                ))
         elif len(entry.shape) == 2:
             base = key[: -len(".weight")] if key.endswith(".weight") else key
             inv.full_weights.append(FullWeight(entry=entry, location=locate(base)))
@@ -266,6 +274,47 @@ def iter_magnitudes(inv: AdapterInventory) -> Iterator[MagnitudeData]:
                 yield MagnitudeData(key=key, location=location, values=None, error=f"load failed: {exc}")
                 continue
             yield MagnitudeData(key=key, location=location, values=arr)
+
+
+@dataclass(frozen=True)
+class TokenDeltaData:
+    """One loaded trainable-token delta, located in the model.
+
+    PEFT selective-token tuning trains a change ``Δ`` to the embedding rows of a
+    chosen set of tokens, stored as ``trainable_tokens_delta`` of shape
+    ``(n_selected_tokens, embedding_dim)``. A rare-token backdoor would live here:
+    one token's row moved far more than the others. ``values`` is that 2-D delta;
+    ``error`` is set and ``values`` is None when loading or the shape failed.
+    """
+
+    key: str
+    location: ModuleLocation
+    values: np.ndarray | None
+    error: str | None = None
+
+
+def iter_token_deltas(inv: AdapterInventory) -> Iterator[TokenDeltaData]:
+    """Load each trainable-token delta as a 2-D float32 array, one at a time.
+
+    Load failures and non-2-D (or empty) tensors are yielded with ``error`` set,
+    never swallowed, so the caller can surface them rather than mis-reading them.
+    """
+    if not inv.trainable_tokens:
+        return
+    with safe_open(str(inv.path), framework="numpy") as handle:
+        for key in inv.trainable_tokens:
+            info = inv.header.get(key, {})
+            location = locate(parse_key(key).base or key)
+            try:
+                entry = _entry(key, info)
+                arr = np.asarray(_load(handle, inv, entry), dtype=np.float32)
+                if arr.ndim != 2 or arr.size == 0:
+                    raise ValueError(f"expected a 2-D (tokens, dim) delta, got shape {list(arr.shape)}")
+            except Exception as exc:  # noqa: BLE001 — reported, never swallowed
+                logger.warning("Trainable-token delta %r could not be loaded: %s", key, exc)
+                yield TokenDeltaData(key=key, location=location, values=None, error=f"load failed: {exc}")
+                continue
+            yield TokenDeltaData(key=key, location=location, values=arr)
 
 
 def iter_pairs(inv: AdapterInventory) -> Iterator[PairData]:
